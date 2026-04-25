@@ -59,7 +59,7 @@ type Monitor struct {
 	mu          sync.RWMutex
 	metrics     *SystemMetrics
 	openClaw    *OpenClawDetector
-	ollama      *OllamaClient
+	Ollama      *OllamaClient
 	ollamaPort  string
 	refreshRate time.Duration
 }
@@ -71,7 +71,7 @@ func NewMonitor() *Monitor {
 			UpdatedAt: time.Now(),
 		},
 		openClaw:    NewOpenClawDetector(3000),
-		ollama:      NewOllamaClient(""),
+		Ollama:      NewOllamaClient(""),
 		ollamaPort:  "11434",
 		refreshRate: 2 * time.Second,
 	}
@@ -106,10 +106,10 @@ func (m *Monitor) Refresh() error {
 	m.metrics.OpenClaw = status
 
 	// Ollama status
-	running := m.ollama.IsRunning()
+	running := m.Ollama.IsRunning()
 	models := []ModelInfo{}
 	if running {
-		if modelList, err := m.ollama.GetModels(); err == nil {
+		if modelList, err := m.Ollama.GetModels(); err == nil {
 			models = modelList
 		}
 	}
