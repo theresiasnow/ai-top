@@ -28,27 +28,46 @@ func NewOpenClawDetector(port int) *OpenClawDetector {
 	}
 }
 
-// IsRunning checks if OpenClaw HTTP server is responding
+// IsRunning checks if OpenClaw processes are running
 func (od *OpenClawDetector) IsRunning() bool {
+	// First try HTTP health check
 	url := fmt.Sprintf("http://localhost:%d/health", od.port)
 	resp, err := od.client.Get(url)
-	if err != nil {
-		return false
+	if err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode < 500 {
+			return true
+		}
 	}
-	defer resp.Body.Close()
 
-	// Any response is good, we just need connectivity
-	return resp.StatusCode < 500
+	// Fallback: check for OpenClaw processes in .openclaw directory
+	processes, err := GetOpenClawProcesses()
+	if err == nil && len(processes) > 0 {
+		return true
+	}
+
+	return false
 }
 
 // GetStatus returns current OpenClaw status
 func (od *OpenClawDetector) GetStatus() (OpenClawStatus, error) {
-	status := OpenClawStatus{
-		Running: od.IsRunning(),
+	status := OpenClawStatus{}
+
+	// Try to find OpenClaw processes
+	processes, err := GetOpenClawProcesses()
+	if err == nil && len(processes) > 0 {
+		status.Running = true
+		// Use first process for aggregate metrics
+		status.PID = processes[0].PID
+		status.Memory = processes[0].Memory
+		status.Uptime = time.Since(processes[0].StartTime)
+		return status, nil
 	}
 
-	// Try to find process info if running
-	if status.Running {
+	// Fallback to HTTP check
+	status.Running = false
+	if od.IsRunning() {
+		status.Running = true
 		if pid, err := GetOpenClawPID(); err == nil {
 			status.PID = pid
 
