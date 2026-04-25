@@ -2,6 +2,8 @@ package ui
 
 import (
 "fmt"
+"sort"
+"strings"
 "time"
 
 "github.com/gdamore/tcell/v2"
@@ -9,63 +11,229 @@ import (
 "github.com/tess/ai-top/internal/monitor"
 )
 
-// Dashboard is the main UI
 type Dashboard struct {
 app     *tview.Application
-root    tview.Primitive
+root    *tview.Flex
 monitor *monitor.Monitor
-grid    *tview.Grid
-content *tview.TextView
 paused  bool
-sortBy  string // cpu, memory, name
+sortBy  string
 }
 
-// NewDashboard creates the dashboard
 func NewDashboard(mon *monitor.Monitor, app *tview.Application) *Dashboard {
-grid := tview.NewGrid().
-SetRows(3, 0, 3).
-SetColumns(0)
-
-// Header
-header := tview.NewTextView().
-SetDynamicColors(true).
-SetText("[yellow]ai-top[-] | Node.js & Ollama Status | Press 'q' to quit")
-
-// Main content area
-content := tview.NewTextView().
-SetDynamicColors(true).
-SetText("Loading metrics...")
-
-// Footer with help
-footer := tview.NewTextView().
-SetDynamicColors(true).
-SetText("[gray]↑↓ Navigate | [yellow]space[-] Pause | [yellow]s[-] Sort | [yellow]c[-] CPU | [yellow]m[-] Memory | [yellow]q[-] Quit")
-
-grid.AddItem(header, 0, 0, 1, 1, 0, 0, false).
-AddItem(content, 1, 0, 1, 1, 0, 0, true).
-AddItem(footer, 2, 0, 1, 1, 0, 0, false)
-
 d := &Dashboard{
 app:     app,
-root:    grid,
 monitor: mon,
-grid:    grid,
-content: content,
-sortBy:  "name",
+sortBy:  "memory",
 }
 
-// Set up key handling
-d.setupKeyHandlers()
+d.root = tview.NewFlex().SetDirection(tview.FlexRow)
+d.root.AddItem(d.createHeader(), 2, 0, false)
+d.root.AddItem(d.createStatsBox(), 4, 0, false)
+d.root.AddItem(d.createServicesBox(), 3, 0, false)
+d.root.AddItem(d.createContent(), 0, 1, true)
+d.root.AddItem(d.createFooter(), 2, 0, false)
 
+d.setupKeyHandlers()
 return d
 }
 
-// Root returns the root widget
 func (d *Dashboard) Root() tview.Primitive {
 return d.root
 }
 
-// setupKeyHandlers configures keyboard input
+func (d *Dashboard) createHeader() tview.Primitive {
+text := tview.NewTextView().SetDynamicColors(true)
+text.SetText("[cyan]┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓[-]\n" +
+"[cyan]┃[-] [::b]📊 ai-top[-::-] - AI Development Monitor " +
+strings.Repeat(" ", 25) + "[cyan]┃[-]\n" +
+"[cyan]┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛[-]")
+return text
+}
+
+func (d *Dashboard) createStatsBox() tview.Primitive {
+statsView := tview.NewTextView().SetDynamicColors(true)
+
+go func() {
+ticker := time.NewTicker(1 * time.Second)
+defer ticker.Stop()
+
+for {
+select {
+case <-ticker.C:
+info, _ := monitor.GetSystemInfo()
+cpu := fmt.Sprintf("[yellow]%.1f%%[-]", info.CPUUsage)
+mem := fmt.Sprintf("[lightblue]%s[-] / [white]%s[-] [yellow](%.1f%%)[-]",
+monitor.FormatMemory(info.MemUsed),
+monitor.FormatMemory(info.MemTotal),
+float64(info.MemPercent))
+
+content := fmt.Sprintf(
+"  [green]CPU[-]: %s (%d cores)    [green]Memory[-]: %s\n",
+cpu, info.CPUCores, mem)
+
+d.app.QueueUpdateDraw(func() {
+statsView.SetText(content)
+})
+}
+}
+}()
+
+return statsView
+}
+
+func (d *Dashboard) createServicesBox() tview.Primitive {
+flex := tview.NewFlex()
+
+openclaw := tview.NewTextView().SetDynamicColors(true).SetText("[gray](loading)[-]")
+ollama := tview.NewTextView().SetDynamicColors(true).SetText("[gray](loading)[-]")
+
+flex.AddItem(openclaw, 0, 1, false)
+flex.AddItem(ollama, 0, 1, false)
+
+go func() {
+ticker := time.NewTicker(2 * time.Second)
+defer ticker.Stop()
+
+for {
+select {
+case <-ticker.C:
+metrics := d.monitor.GetMetrics()
+
+oc := "  [red]●[-] OpenClaw: offline"
+if metrics.OpenClaw.Running {
+oc = "  [green]●[-] OpenClaw: online"
+}
+
+ol := "  [red]●[-] Ollama: offline"
+if metrics.Ollama.Running {
+ol = fmt.Sprintf("  [green]●[-] Ollama: online [lightblue](%d models)[-]", len(metrics.Ollama.Models))
+}
+
+d.app.QueueUpdateDraw(func() {
+openclaw.SetText(oc)
+ollama.SetText(ol)
+})
+}
+}
+}()
+
+return flex
+}
+
+func (d *Dashboard) createContent() tview.Primitive {
+flex := tview.NewFlex().SetDirection(tview.FlexRow)
+
+tabBar := tview.NewTextView().
+SetDynamicColors(true).
+SetText("  [white:green] Node.js [-::-]  [lightblue]Ollama[-]  [lightblue]OpenClaw[-]  [lightblue]Cron[-]")
+
+flex.AddItem(tabBar, 1, 0, false)
+flex.AddItem(d.createProcessTable("Node.js", func() []monitor.ProcessInfo {
+procs, _ := d.monitor.GetNodeProcesses()
+return procs
+}), 0, 1, true)
+
+return flex
+}
+
+func (d *Dashboard) createProcessTable(name string, getProcs func() []monitor.ProcessInfo) tview.Primitive {
+table := tview.NewTable().
+SetBorders(false).
+SetSelectable(true, false).
+SetFixed(1, 0)
+
+headers := []string{"PID", "NAME", "USER", "CPU", "MEMORY"}
+for col, h := range headers {
+cell := tview.NewTableCell(" " + h + " ").
+SetTextColor(tcell.ColorYellow).
+SetSelectable(false)
+table.SetCell(0, col, cell)
+}
+
+updateTable := func() {
+processes := getProcs()
+
+switch d.sortBy {
+case "cpu":
+sort.Slice(processes, func(i, j int) bool {
+return processes[i].CPU > processes[j].CPU
+})
+case "memory":
+sort.Slice(processes, func(i, j int) bool {
+return processes[i].Memory > processes[j].Memory
+})
+default:
+sort.Slice(processes, func(i, j int) bool {
+return processes[i].Name < processes[j].Name
+})
+}
+
+if len(processes) > 30 {
+processes = processes[:30]
+}
+
+for r := table.GetRowCount() - 1; r > 0; r-- {
+table.RemoveRow(r)
+}
+
+if len(processes) == 0 {
+cell := tview.NewTableCell("(no processes)")
+cell.SetTextColor(tcell.ColorGray)
+table.SetCell(1, 0, cell)
+return
+}
+
+for idx, p := range processes {
+row := idx + 1
+data := []string{
+fmt.Sprintf("%d", p.PID),
+p.Name,
+p.User,
+fmt.Sprintf("%.1f%%", p.CPU),
+monitor.FormatMemory(p.Memory),
+}
+
+for col, text := range data {
+color := tcell.ColorWhite
+if col == 4 {
+color = tcell.ColorLightBlue
+}
+
+cell := tview.NewTableCell(" " + padRight(text, 12) + " ").
+SetTextColor(color)
+table.SetCell(row, col, cell)
+}
+}
+}
+
+updateTable()
+
+go func() {
+ticker := time.NewTicker(1 * time.Second)
+defer ticker.Stop()
+
+for {
+select {
+case <-ticker.C:
+if !d.paused {
+d.app.QueueUpdateDraw(updateTable)
+}
+}
+}
+}()
+
+return table
+}
+
+func (d *Dashboard) createFooter() tview.Primitive {
+text := tview.NewTextView().
+SetDynamicColors(true).
+SetText("  [lightblue]q[-] Quit  [lightblue]space[-] Pause  [lightblue]s[-] Sort (name)  " +
+"[lightblue]c[-] Sort (CPU)  [lightblue]m[-] Sort (memory)")
+
+return text
+}
+
 func (d *Dashboard) setupKeyHandlers() {
 d.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 switch event.Rune() {
@@ -89,68 +257,11 @@ return event
 })
 }
 
-// Update refreshes the displayed content
-func (d *Dashboard) Update() {
-if d.paused {
-return
-}
+func (d *Dashboard) Update() {}
 
-metrics := d.monitor.GetMetrics()
-text := d.formatMetrics(metrics)
-d.content.SetText(text)
+func padRight(str string, length int) string {
+if len(str) >= length {
+return str
 }
-
-// formatMetrics converts metrics to display text
-func (d *Dashboard) formatMetrics(m *monitor.SystemMetrics) string {
-var output string
-
-// Updated at
-output += fmt.Sprintf("[gray]Last update: %s[-]\n\n", m.UpdatedAt.Format("15:04:05"))
-
-// OpenClaw status
-output += "[yellow]OpenClaw[-]\n"
-if m.OpenClaw.Running {
-output += fmt.Sprintf("  [green]●[-] Running (PID: %d, Memory: %s, Uptime: %s)\n",
-m.OpenClaw.PID, monitor.FormatMemory(m.OpenClaw.Memory), monitor.GetProcessUptime(time.Now().Add(-m.OpenClaw.Uptime)))
-} else {
-output += "  [red]●[-] Not running\n"
-}
-
-// Ollama status
-output += "\n[yellow]Ollama[-]\n"
-if m.Ollama.Running {
-output += fmt.Sprintf("  [green]●[-] Running (%d models loaded)\n", len(m.Ollama.Models))
-for _, model := range m.Ollama.Models {
-output += fmt.Sprintf("    • %s (%s)\n", model.Name, model.Size)
-}
-} else {
-output += "  [red]●[-] Not running\n"
-}
-
-// Processes
-output += "\n[yellow]Node.js Processes[-]\n"
-if len(m.Processes) == 0 {
-output += "  (none)\n"
-} else {
-// Header
-output += fmt.Sprintf("  [cyan]%-8s %-30s %-8s %-10s[-]\n", "PID", "Name", "User", "Memory")
-output += "  " + "─────────────────────────────────────────────────\n"
-
-for _, p := range m.Processes {
-output += fmt.Sprintf("  %-8d %-30s %-8s %-10s\n",
-p.PID, p.Name, p.User, monitor.FormatMemory(p.Memory))
-}
-}
-
-// Cron jobs (placeholder)
-output += "\n[yellow]Cron Jobs[-]\n"
-if len(m.CronJobs) == 0 {
-output += "  (none currently tracked)\n"
-} else {
-for _, cron := range m.CronJobs {
-output += fmt.Sprintf("  • %s: %s\n", cron.Name, cron.Status)
-}
-}
-
-return output
+return str + strings.Repeat(" ", length-len(str))
 }

@@ -73,3 +73,36 @@ func TestFormatMemory(t *testing.T) {
 		t.Logf("FormatMemory(%d) = %s", tt.input, result)
 	}
 }
+
+func TestCronJobs(t *testing.T) {
+jobs, err := GetCronJobs()
+
+if err != nil {
+t.Logf("⚠️  Error reading cron jobs: %v", err)
+return
+}
+
+t.Logf("✅ Found %d cron jobs", len(jobs))
+for _, j := range jobs {
+t.Logf("  - %s: %s (last run: %s)", j.Name, j.Schedule, j.LastRun)
+}
+}
+
+func TestOpenClawProcesses(t *testing.T) {
+processes, err := GetOpenClawProcesses()
+
+if err != nil {
+t.Logf("⚠️  Error finding OpenClaw processes: %v", err)
+return
+}
+
+if len(processes) == 0 {
+t.Logf("⚠️  No OpenClaw processes found (may not be running)")
+return
+}
+
+t.Logf("✅ Found %d OpenClaw processes", len(processes))
+for _, p := range processes {
+t.Logf("  - PID %d: %s (Memory: %s)", p.PID, p.Name, FormatMemory(p.Memory))
+}
+}
