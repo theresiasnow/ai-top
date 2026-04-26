@@ -8,11 +8,12 @@ import (
 
 // SystemMetrics holds current system state
 type SystemMetrics struct {
-	OpenClaw  OpenClawStatus
-	Ollama    OllamaStatus
-	CronJobs  []CronJob
-	Processes []ProcessInfo
-	UpdatedAt time.Time
+	OpenClaw      OpenClawStatus
+	Ollama        OllamaStatus
+	OllamaProcess *ProcessInfo
+	CronJobs      []CronJob
+	Processes     []ProcessInfo
+	UpdatedAt     time.Time
 }
 
 type OpenClawStatus struct {
@@ -29,18 +30,18 @@ type OllamaStatus struct {
 }
 
 type ModelInfo struct {
-	Name      string
-	Size      string
-	Modified  time.Time
-	Loaded    bool
+	Name     string
+	Size     string
+	Modified time.Time
+	Loaded   bool
 }
 
 type CronJob struct {
-	Name      string
-	Schedule  string
-	LastRun   time.Time
-	Status    string
-	NextRun   time.Time
+	Name     string
+	Schedule string
+	LastRun  time.Time
+	Status   string
+	NextRun  time.Time
 }
 
 type ProcessInfo struct {
@@ -67,7 +68,7 @@ type Monitor struct {
 // NewMonitor creates a new monitor
 func NewMonitor() *Monitor {
 	return &Monitor{
-		metrics:     &SystemMetrics{
+		metrics: &SystemMetrics{
 			UpdatedAt: time.Now(),
 		},
 		openClaw:    NewOpenClawDetector(3000),
@@ -91,6 +92,14 @@ func (m *Monitor) GetMetrics() *SystemMetrics {
 	if m.metrics.CronJobs != nil {
 		snapshot.CronJobs = make([]CronJob, len(m.metrics.CronJobs))
 		copy(snapshot.CronJobs, m.metrics.CronJobs)
+	}
+	if m.metrics.Ollama.Models != nil {
+		snapshot.Ollama.Models = make([]ModelInfo, len(m.metrics.Ollama.Models))
+		copy(snapshot.Ollama.Models, m.metrics.Ollama.Models)
+	}
+	if m.metrics.OllamaProcess != nil {
+		ollamaProcess := *m.metrics.OllamaProcess
+		snapshot.OllamaProcess = &ollamaProcess
 	}
 
 	return &snapshot
@@ -116,6 +125,11 @@ func (m *Monitor) Refresh() error {
 	m.metrics.Ollama = OllamaStatus{
 		Running: running,
 		Models:  models,
+	}
+	if ollamaProcess, ok := GetOllamaProcess(); ok {
+		m.metrics.OllamaProcess = &ollamaProcess
+	} else {
+		m.metrics.OllamaProcess = nil
 	}
 
 	// Processes

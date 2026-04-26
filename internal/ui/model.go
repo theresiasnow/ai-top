@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"time"
 
@@ -22,31 +21,29 @@ var (
 	colorText  = lipgloss.Color("#CCCCCC")
 	colorDim   = lipgloss.Color("#445566")
 
-	styleTitle       = lipgloss.NewStyle().Foreground(colorCyan).Bold(true)
-	styleTabActive   = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(colorCyan).Padding(0, 1).Bold(true)
-	styleTabInactive = lipgloss.NewStyle().Foreground(colorDim).Padding(0, 1)
-	styleGood        = lipgloss.NewStyle().Foreground(colorGreen)
-	styleBad         = lipgloss.NewStyle().Foreground(colorRed)
-	styleWarn        = lipgloss.NewStyle().Foreground(colorAmber)
-	styleDim         = lipgloss.NewStyle().Foreground(colorDim)
-	styleColHead     = lipgloss.NewStyle().Foreground(colorBlue).Bold(true)
-	styleText        = lipgloss.NewStyle().Foreground(colorText)
+	styleTitle   = lipgloss.NewStyle().Foreground(colorCyan).Bold(true)
+	styleGood    = lipgloss.NewStyle().Foreground(colorGreen)
+	styleBad     = lipgloss.NewStyle().Foreground(colorRed)
+	styleWarn    = lipgloss.NewStyle().Foreground(colorAmber)
+	styleDim     = lipgloss.NewStyle().Foreground(colorDim)
+	styleColHead = lipgloss.NewStyle().Foreground(colorBlue).Bold(true)
+	styleText    = lipgloss.NewStyle().Foreground(colorText)
 )
 
 type Model struct {
-	mon       *monitor.Monitor
-	width     int
-	height    int
-	activeTab int
-	sortBy    string
-	paused    bool
+	mon    *monitor.Monitor
+	width  int
+	height int
+	list   SelectableList
+	sortBy string
+	paused bool
+	errMsg string
 }
 
 func NewModel(mon *monitor.Monitor) Model {
 	return Model{
-		mon:       mon,
-		activeTab: 0,
-		sortBy:    "memory",
+		mon:    mon,
+		sortBy: "memory",
 	}
 }
 
@@ -61,42 +58,71 @@ type tickMsg time.Time
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		m.syncList()
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case " ":
 			m.paused = !m.paused
-		case "1":
-			m.activeTab = 0
-		case "2":
-			m.activeTab = 1
-		case "3":
-			m.activeTab = 2
-		case "4":
-			m.activeTab = 3
+		case "up", "down":
+			m.list.HandleKey(msg.String())
+		case "k", "r":
+			action := m.list.HandleKey(msg.String())
+			m.dispatchAction(action)
 		case "s":
 			m.sortBy = "name"
 		case "c":
 			m.sortBy = "cpu"
 		case "m":
 			m.sortBy = "memory"
-		case "tab":
-			m.activeTab = (m.activeTab + 1) % 4
-		case "shift+tab":
-			m.activeTab = (m.activeTab - 1 + 4) % 4
 		}
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.syncList()
 
 	case tickMsg:
+		m.syncList()
 		return m, tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
 			return tickMsg(t)
 		})
 	}
 
 	return m, nil
+}
+
+func (m *Model) dispatchAction(action Action) {
+	if action == ActionNone {
+		return
+	}
+
+	item := m.list.SelectedItem()
+	var err error
+	switch action {
+	case ActionKill:
+		err = monitor.KillProcess(item.PID)
+	case ActionRestart:
+		err = monitor.RestartProcess(item.PID)
+	case ActionUnload:
+		err = monitor.UnloadOllamaModel(m.mon.Ollama, item.ModelName)
+	}
+	if err != nil {
+		m.errMsg = err.Error()
+		return
+	}
+	m.errMsg = ""
+	if err := m.mon.Refresh(); err != nil {
+		m.errMsg = err.Error()
+	}
+	m.syncList()
+}
+
+func (m *Model) syncList() {
+	if m.mon == nil {
+		return
+	}
+	m.list.SetItems(m.buildListItems(m.mon.GetMetrics()))
 }
 
 func (m Model) View() string {
@@ -107,9 +133,9 @@ func (m Model) View() string {
 	metrics := m.mon.GetMetrics()
 
 	var sb strings.Builder
-	sb.WriteString(m.renderHeader(metrics))
+	sb.WriteString(m.renderStatusBar(metrics))
 	sb.WriteString("\n")
-	sb.WriteString(m.renderMainPanel(metrics))
+	sb.WriteString(m.renderProcessPanel(metrics))
 	sb.WriteString("\n")
 	sb.WriteString(m.renderFooter())
 
@@ -191,6 +217,7 @@ func boxTop(left, right string, totalWidth int) string {
 // boxLine wraps content in │ … │, padding to totalWidth.
 func boxLine(content string, totalWidth int) string {
 	innerW := totalWidth - 4
+	content = truncate(content, innerW)
 	pad := innerW - lipgloss.Width(content)
 	if pad < 0 {
 		pad = 0
@@ -210,47 +237,74 @@ func boxBottom(totalWidth int) string {
 
 // ── sections ─────────────────────────────────────────────────────────────────
 
-func (m Model) renderHeader(metrics *monitor.SystemMetrics) string {
-	w := m.width
+func (m Model) renderStatusBar(metrics *monitor.SystemMetrics) string {
+	w := max(41, m.width)
+	gap := 1
+	leftW := (w - gap) / 2
+	rightW := w - gap - leftW
 
-	// line 1: title + clock
-	title := styleTitle.Render("⟨ ai-top ⟩")
-	subtitle := styleDim.Render("  AI Development Monitor")
-	timeStr := styleDim.Render(time.Now().Format("Mon 15:04:05"))
-	left1 := title + subtitle
-	fill1 := w - lipgloss.Width(left1) - lipgloss.Width(timeStr) - 2
-	if fill1 < 1 {
-		fill1 = 1
+	openClawLines := m.openClawStatusLines(metrics.OpenClaw)
+	ollamaLines := m.ollamaStatusLines(metrics.Ollama)
+
+	leftBox := renderSmallBox(styleTitle.Render(" OpenClaw "), leftW, openClawLines)
+	rightBox := renderSmallBox(styleTitle.Render(" Ollama "), rightW, ollamaLines)
+
+	var lines []string
+	for i := range leftBox {
+		lines = append(lines, leftBox[i]+" "+rightBox[i])
 	}
-	line1 := "  " + left1 + strings.Repeat(" ", fill1) + timeStr
+	return strings.Join(lines, "\n")
+}
 
-	// line 2: service status
-	var ocPart string
-	if metrics.OpenClaw.Running {
-		ocPart = styleGood.Render("● OpenClaw") +
-			styleDim.Render(fmt.Sprintf("  pid %d · %s · up %s",
-				metrics.OpenClaw.PID,
-				monitor.FormatMemory(metrics.OpenClaw.Memory),
-				formatUptime(metrics.OpenClaw.Uptime)))
-	} else {
-		ocPart = styleBad.Render("● OpenClaw offline")
+func (m Model) openClawStatusLines(s monitor.OpenClawStatus) []string {
+	if !s.Running {
+		return []string{
+			styleBad.Render("● offline"),
+			styleDim.Render("no OpenClaw service detected"),
+		}
+	}
+	return []string{
+		styleGood.Render("● online") + styleDim.Render(fmt.Sprintf("  pid %d · %s · up %s",
+			s.PID, monitor.FormatMemory(s.Memory), formatUptime(s.Uptime))),
+		styleDim.Render("OpenClaw service detected"),
+	}
+}
+
+func (m Model) ollamaStatusLines(s monitor.OllamaStatus) []string {
+	if !s.Running {
+		return []string{
+			styleBad.Render("● offline"),
+			styleDim.Render("no Ollama API detected"),
+		}
 	}
 
-	var olPart string
-	if metrics.Ollama.Running {
-		olPart = styleGood.Render("● Ollama") +
-			styleDim.Render(fmt.Sprintf("  %d models", len(metrics.Ollama.Models)))
-	} else {
-		olPart = styleBad.Render("● Ollama offline")
+	var names []string
+	for i, model := range s.Models {
+		if i >= 3 {
+			break
+		}
+		names = append(names, model.Name+" "+modelHeat(model.Name))
 	}
-
-	pauseStr := ""
-	if m.paused {
-		pauseStr = "    " + styleWarn.Render("⏸ paused")
+	modelLine := styleDim.Render("no loaded models")
+	if len(names) > 0 {
+		modelLine = strings.Join(names, styleDim.Render("  "))
 	}
-	line2 := "  " + ocPart + "    " + olPart + pauseStr
+	return []string{
+		styleGood.Render("● online") + styleDim.Render(fmt.Sprintf("  %d models", len(s.Models))),
+		modelLine,
+	}
+}
 
-	return line1 + "\n" + line2
+func renderSmallBox(title string, width int, lines []string) []string {
+	if width < 20 {
+		width = 20
+	}
+	return []string{
+		boxTop(title, "", width),
+		boxLine(lines[0], width),
+		boxLine(lines[1], width),
+		boxBottom(width),
+	}
 }
 
 func formatUptime(d time.Duration) string {
@@ -262,65 +316,28 @@ func formatUptime(d time.Duration) string {
 	return fmt.Sprintf("%dm", mn)
 }
 
-func (m Model) renderMainPanel(metrics *monitor.SystemMetrics) string {
-	w := m.width
-	if w < 40 {
-		w = 40
-	}
-
-	// Tab bar embedded in the top border
-	tabs := []string{"Node.js", "Ollama", "OpenClaw", "Cron"}
-	nums := []string{"1", "2", "3", "4"}
-	var tabBar strings.Builder
-	for i, name := range tabs {
-		if i > 0 {
-			tabBar.WriteString(" ")
-		}
-		label := nums[i] + ":" + name
-		if i == m.activeTab {
-			tabBar.WriteString(styleTabActive.Render(label))
-		} else {
-			tabBar.WriteString(styleTabInactive.Render(label))
-		}
-	}
-
-	// Sort indicator in the top-right corner for the process tab
-	sortIndicator := ""
-	if m.activeTab == 0 {
-		switch m.sortBy {
-		case "cpu":
-			sortIndicator = styleDim.Render(" sort:cpu ")
-		case "name":
-			sortIndicator = styleDim.Render(" sort:name ")
-		default:
-			sortIndicator = styleDim.Render(" sort:mem ")
-		}
-	}
-
-	// Content height accounting for header(2) + newline(1) + borders(2) + divider(1) + footer(1) + gap(1)
+func (m Model) renderProcessPanel(metrics *monitor.SystemMetrics) string {
+	w := max(40, m.width)
+	innerW := w - 4
 	contentHeight := m.height - 8
-	if contentHeight < 3 {
-		contentHeight = 3
+	if contentHeight < 5 {
+		contentHeight = 5
 	}
 
-	var lines []string
-	switch m.activeTab {
-	case 0:
-		lines = m.processLines(metrics.Processes, contentHeight)
-	case 1:
-		lines = m.ollamaLines(metrics.Ollama, contentHeight)
-	case 2:
-		lines = m.openClawLines(metrics.OpenClaw)
-	case 3:
-		lines = m.cronLines(contentHeight)
+	items := m.list.items
+	list := m.list
+	if len(items) == 0 {
+		items = m.buildListItems(metrics)
+		list.SetItems(items)
 	}
+
+	count := selectableCount(items)
+	sortIndicator := styleDim.Render(fmt.Sprintf(" %d procs · sorted:%s ", count, sortLabel(m.sortBy)))
+	lines := list.Render(innerW, contentHeight)
 
 	var sb strings.Builder
-	sb.WriteString(boxTop(tabBar.String(), sortIndicator, w))
+	sb.WriteString(boxTop(styleTitle.Render(" Processes "), sortIndicator, w))
 	sb.WriteString("\n")
-	sb.WriteString(boxDivider(w))
-	sb.WriteString("\n")
-
 	for i, line := range lines {
 		if i >= contentHeight {
 			break
@@ -328,129 +345,155 @@ func (m Model) renderMainPanel(metrics *monitor.SystemMetrics) string {
 		sb.WriteString(boxLine(line, w))
 		sb.WriteString("\n")
 	}
-	for i := len(lines); i < contentHeight; i++ {
-		sb.WriteString(boxLine("", w))
-		sb.WriteString("\n")
-	}
-
 	sb.WriteString(boxBottom(w))
 	return sb.String()
 }
 
-// ── tab content ───────────────────────────────────────────────────────────────
+func (m Model) buildListItems(metrics *monitor.SystemMetrics) []ListItem {
+	var items []ListItem
 
-func (m Model) processLines(processes []monitor.ProcessInfo, maxLines int) []string {
-	// Column widths: cpuW=15 (bar8 + space + %5.1f%% 6), memW=17 (bar8 + space + %-8s)
-	const (
-		pidW    = 7
-		userW   = 10
-		cpuW    = 15
-		memW    = 17
-		spacers = 8 // 4 × "  "
-	)
-	innerW := m.width - 4
-	nameW := innerW - pidW - userW - cpuW - memW - spacers
-	if nameW < 12 {
-		nameW = 12
+	if len(metrics.Ollama.Models) > 0 {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "Ollama models"})
+		for _, model := range metrics.Ollama.Models {
+			items = append(items, ListItem{
+				Kind:      KindOllamaModel,
+				Label:     model.Name,
+				ModelName: model.Name,
+				Extra:     model.Size,
+			})
+		}
 	}
 
-	hdr := styleColHead.Render(fmt.Sprintf("%-*s  %-*s  %-*s  %-*s  %-*s",
-		pidW, "PID", nameW, "NAME", userW, "USER", cpuW, "CPU", memW, "MEMORY"))
-	divider := styleDim.Render(strings.Repeat("─", lipgloss.Width(hdr)))
-	lines := []string{hdr, divider}
-
-	if len(processes) == 0 {
-		return append(lines, styleDim.Render("  no processes found"))
+	if metrics.OllamaProcess != nil {
+		items = append(items,
+			ListItem{Kind: KindSectionHead, Label: "ollama process"},
+			processItem(*metrics.OllamaProcess),
+		)
 	}
 
-	sorted := make([]monitor.ProcessInfo, len(processes))
-	copy(sorted, processes)
-	switch m.sortBy {
-	case "cpu":
-		sort.Slice(sorted, func(i, j int) bool { return sorted[i].CPU > sorted[j].CPU })
-	case "name":
-		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
-	default:
-		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Memory > sorted[j].Memory })
+	processes := openClawProcesses(metrics.Processes)
+	sortProcesses(processes, m.sortBy)
+	if len(processes) > 0 {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "OpenClaw processes"})
+		for _, p := range processes {
+			items = append(items, processItem(p))
+		}
 	}
 
-	available := maxLines - 2
-	if available < 1 {
-		available = 1
+	if len(items) == 0 {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "no monitored processes found"})
 	}
-	if len(sorted) > available {
-		sorted = sorted[:available]
-	}
-
-	for _, p := range sorted {
-		name := truncate(p.Name, nameW)
-		user := truncate(p.User, userW)
-
-		pidStr := lipgloss.NewStyle().Width(pidW).Render(fmt.Sprintf("%d", p.PID))
-		nameStr := lipgloss.NewStyle().Width(nameW).Foreground(colorText).Render(name)
-		userStr := lipgloss.NewStyle().Width(userW).Foreground(colorDim).Render(user)
-
-		lines = append(lines, pidStr+"  "+nameStr+"  "+userStr+"  "+cpuBar(p.CPU)+"  "+memBar(p.Memory, p.MemoryPct))
-	}
-
-	return lines
+	return items
 }
 
-func (m Model) ollamaLines(status monitor.OllamaStatus, maxLines int) []string {
-	if !status.Running {
-		return []string{"", "  " + styleBad.Render("● Ollama is offline")}
+func processItem(p monitor.ProcessInfo) ListItem {
+	return ListItem{
+		Kind:      KindProcess,
+		Label:     p.Name,
+		PID:       p.PID,
+		CPU:       p.CPU,
+		Memory:    p.Memory,
+		MemoryPct: p.MemoryPct,
+		Extra:     p.User,
 	}
+}
 
-	const (
-		sizeW     = 10
-		priorityW = 14
-		statusW   = 12
-		spacers   = 6
-	)
-	innerW := m.width - 4
-	nameW := innerW - sizeW - priorityW - statusW - spacers
-	if nameW < 15 {
-		nameW = 15
-	}
-
-	hdr := styleColHead.Render(fmt.Sprintf("%-*s  %-*s  %-*s  %-*s",
-		nameW, "MODEL", sizeW, "SIZE", priorityW, "PRIORITY", statusW, "STATUS"))
-	divider := styleDim.Render(strings.Repeat("─", lipgloss.Width(hdr)))
-	lines := []string{hdr, divider}
-
-	if len(status.Models) == 0 {
-		return append(lines, styleDim.Render("  no models available"))
-	}
-
-	available := maxLines - 2
-	if available < 1 {
-		available = 1
-	}
-
-	for i, model := range status.Models {
-		if i >= available {
-			break
+func openClawProcesses(processes []monitor.ProcessInfo) []monitor.ProcessInfo {
+	var result []monitor.ProcessInfo
+	for _, p := range processes {
+		if p.Name == "ollama" {
+			continue
 		}
+		result = append(result, p)
+	}
+	return result
+}
 
-		var prioLabel string
-		switch {
-		case isHotModel(model.Name):
-			prioLabel = styleGood.Render("🔥 hot")
-		case isWarmModel(model.Name):
-			prioLabel = styleWarn.Render("🌡 warm")
-		default:
-			prioLabel = styleDim.Render("❄ cold")
+func sortProcesses(processes []monitor.ProcessInfo, sortBy string) {
+	switch sortBy {
+	case "cpu":
+		sortByCPU(processes)
+	case "name":
+		sortByName(processes)
+	default:
+		sortByMemory(processes)
+	}
+}
+
+func sortByCPU(processes []monitor.ProcessInfo) {
+	for i := 0; i < len(processes); i++ {
+		for j := i + 1; j < len(processes); j++ {
+			if processes[j].CPU > processes[i].CPU {
+				processes[i], processes[j] = processes[j], processes[i]
+			}
 		}
+	}
+}
 
-		nameStr := lipgloss.NewStyle().Width(nameW).Foreground(colorText).Render(truncate(model.Name, nameW))
-		sizeStr := lipgloss.NewStyle().Width(sizeW).Foreground(colorDim).Render(model.Size)
-		prioStr := lipgloss.NewStyle().Width(priorityW).Render(prioLabel)
-		statStr := styleGood.Render("● loaded")
+func sortByMemory(processes []monitor.ProcessInfo) {
+	for i := 0; i < len(processes); i++ {
+		for j := i + 1; j < len(processes); j++ {
+			if processes[j].Memory > processes[i].Memory {
+				processes[i], processes[j] = processes[j], processes[i]
+			}
+		}
+	}
+}
 
-		lines = append(lines, nameStr+"  "+sizeStr+"  "+prioStr+"  "+statStr)
+func sortByName(processes []monitor.ProcessInfo) {
+	for i := 0; i < len(processes); i++ {
+		for j := i + 1; j < len(processes); j++ {
+			if processes[j].Name < processes[i].Name {
+				processes[i], processes[j] = processes[j], processes[i]
+			}
+		}
+	}
+}
+
+func selectableCount(items []ListItem) int {
+	count := 0
+	for _, item := range items {
+		if item.selectable() {
+			count++
+		}
+	}
+	return count
+}
+
+func sortLabel(sortBy string) string {
+	switch sortBy {
+	case "cpu":
+		return "cpu"
+	case "name":
+		return "name"
+	default:
+		return "mem"
+	}
+}
+
+func (m Model) renderFooter() string {
+	type binding struct{ key, desc string }
+	bindings := []binding{
+		{"↑↓", "select row"},
+		{"k", "kill/unload"},
+		{"r", "restart/unload"},
+		{"m/c/s", "sort"},
+		{"Space", "pause"},
+		{"q", "quit"},
 	}
 
-	return lines
+	sep := styleDim.Render("  │  ")
+	var parts []string
+	for _, b := range bindings {
+		parts = append(parts, styleTitle.Render(b.key)+styleDim.Render(":"+b.desc))
+	}
+	if m.paused {
+		parts = append(parts, styleWarn.Render("paused"))
+	}
+	if m.errMsg != "" {
+		parts = append(parts, styleBad.Render(truncate(m.errMsg, 36)))
+	}
+	return "  " + strings.Join(parts, sep)
 }
 
 func isHotModel(modelName string) bool {
@@ -464,101 +507,21 @@ func isWarmModel(modelName string) bool {
 	return map[string]bool{"qwen3:8b": true}[modelName]
 }
 
-func (m Model) openClawLines(s monitor.OpenClawStatus) []string {
-	if !s.Running {
-		return []string{"", "  " + styleBad.Render("● OpenClaw is offline")}
-	}
-
-	kv := func(k, v string) string {
-		return "  " + styleColHead.Render(fmt.Sprintf("%-10s", k)) + styleText.Render(v)
-	}
-
-	return []string{
-		"",
-		"  " + styleGood.Render("● OpenClaw online"),
-		"",
-		kv("Status", "running"),
-		kv("PID", fmt.Sprintf("%d", s.PID)),
-		kv("Memory", monitor.FormatMemory(s.Memory)),
-		kv("Uptime", formatUptime(s.Uptime)),
-	}
-}
-
-func (m Model) cronLines(maxLines int) []string {
-	cronJobs, err := monitor.GetCronJobs()
-	if err != nil || len(cronJobs) == 0 {
-		return []string{styleDim.Render("  no cron jobs defined")}
-	}
-
-	const (
-		scheduleW = 22
-		statusW   = 14
-		spacers   = 4
-	)
-	innerW := m.width - 4
-	nameW := innerW - scheduleW - statusW - spacers
-	if nameW < 15 {
-		nameW = 15
-	}
-
-	hdr := styleColHead.Render(fmt.Sprintf("%-*s  %-*s  %-*s",
-		nameW, "JOB NAME", scheduleW, "SCHEDULE", statusW, "STATUS"))
-	divider := styleDim.Render(strings.Repeat("─", lipgloss.Width(hdr)))
-	lines := []string{hdr, divider}
-
-	available := maxLines - 2
-	if available < 1 {
-		available = 1
-	}
-	if len(cronJobs) > available {
-		cronJobs = cronJobs[:available]
-	}
-
-	for _, job := range cronJobs {
-		var statusStr string
-		switch job.Status {
-		case "success", "enabled":
-			statusStr = styleGood.Render("✓ " + job.Status)
-		case "running":
-			statusStr = styleWarn.Render("▶ " + job.Status)
-		default:
-			statusStr = styleBad.Render("✗ " + job.Status)
-		}
-
-		nameStr := lipgloss.NewStyle().Width(nameW).Foreground(colorText).Render(truncate(job.Name, nameW))
-		schedStr := lipgloss.NewStyle().Width(scheduleW).Foreground(colorDim).Render(truncate(job.Schedule, scheduleW))
-		lines = append(lines, nameStr+"  "+schedStr+"  "+statusStr)
-	}
-
-	return lines
-}
-
-func (m Model) renderFooter() string {
-	type binding struct{ key, desc string }
-	bindings := []binding{
-		{"Tab/1-4", "switch"},
-		{"m", "sort mem"},
-		{"c", "sort cpu"},
-		{"s", "sort name"},
-		{"Space", "pause"},
-		{"q", "quit"},
-	}
-
-	sep := styleDim.Render("  │  ")
-	var parts []string
-	for _, b := range bindings {
-		parts = append(parts, styleTitle.Render(b.key)+styleDim.Render(":"+b.desc))
-	}
-	return "  " + strings.Join(parts, sep)
-}
-
 // truncate clips s to at most n visible characters, appending "…" if clipped.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	if lipgloss.Width(s) <= n {
 		return s
 	}
 	if n <= 1 {
 		return "…"
 	}
-	return s[:n-1] + "…"
+
+	var b strings.Builder
+	for _, r := range s {
+		if lipgloss.Width(b.String()+string(r)+"…") > n {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return b.String() + "…"
 }
