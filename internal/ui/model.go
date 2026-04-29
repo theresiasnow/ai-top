@@ -158,12 +158,12 @@ func (m Model) View() string {
 	var sb strings.Builder
 	sb.WriteString(m.renderStatusBar(metrics))
 	sb.WriteString("\n")
+	sb.WriteString(m.renderProcessPanel(metrics, contentHeight))
+	sb.WriteString("\n")
 	if showInsights {
 		sb.WriteString(m.renderInsightsAndLogs(metrics))
 		sb.WriteString("\n")
 	}
-	sb.WriteString(m.renderProcessPanel(metrics, contentHeight))
-	sb.WriteString("\n")
 	sb.WriteString(m.renderFooter())
 
 	return sb.String()
@@ -356,10 +356,10 @@ func (m Model) renderInsightsAndLogs(metrics *monitor.SystemMetrics) string {
 	leftW := (w - gap) / 2
 	rightW := w - gap - leftW
 
-	insightLines := m.generateInsights(metrics)
+	memLines := m.generateMemoryLines(metrics)
 	logLines := m.ollamaLogLines(metrics)
 
-	leftBox := m.renderTextBox(styleTitle.Render(" Operational Insights "), leftW, insightLines)
+	leftBox := m.renderTextBox(styleTitle.Render(" Memory "), leftW, memLines)
 	rightBox := m.renderTextBox(styleTitle.Render(" Ollama Logs "), rightW, logLines)
 
 	var lines []string
@@ -385,6 +385,86 @@ func (m Model) renderTextBox(title string, width int, lines []string) []string {
 	}
 	out = append(out, boxBottom(width))
 	return out
+}
+
+// generateMemoryLines produces memory analysis content for the Memory panel.
+// It mirrors ollamon's memory view: RAM/Swap bars, VRAM per loaded model, status.
+func (m Model) generateMemoryLines(metrics *monitor.SystemMetrics) []string {
+	var lines []string
+	si := metrics.SysInfo
+
+	// RAM bar
+	ramPct := float64(si.MemPercent)
+	ramColor := colorGreen
+	switch {
+	case ramPct >= 85:
+		ramColor = colorRed
+	case ramPct >= 70:
+		ramColor = colorAmber
+	}
+	ramLine := styleColHead.Render("RAM  ") +
+		miniBar(ramPct, 10) + "  " +
+		lipgloss.NewStyle().Foreground(ramColor).Render(fmt.Sprintf("%4.0f%%", ramPct)) +
+		styleDim.Render("  "+monitor.FormatMemory(si.MemUsed)+"/"+monitor.FormatMemory(si.MemTotal))
+	lines = append(lines, ramLine)
+
+	// Swap bar (only shown when swap is configured)
+	if si.SwapTotal > 0 {
+		swapPct := float64(si.SwapUsed) / float64(si.SwapTotal) * 100
+		swapLine := styleColHead.Render("Swap ") +
+			miniBar(swapPct, 10) + "  " +
+			styleDim.Render(fmt.Sprintf("%4.0f%%  %s/%s",
+				swapPct, monitor.FormatMemory(si.SwapUsed), monitor.FormatMemory(si.SwapTotal)))
+		lines = append(lines, swapLine)
+	}
+
+	// VRAM section header
+	lines = append(lines, styleDim.Render("  VRAM (Unified Memory)"))
+
+	// Per-model VRAM breakdown from /api/ps
+	if len(metrics.RunningModels) == 0 {
+		lines = append(lines, styleDim.Render("  no models in VRAM"))
+	} else {
+		for _, rm := range metrics.RunningModels {
+			vramPct := 0.0
+			if si.MemTotal > 0 {
+				vramPct = float64(rm.SizeVRAM) / float64(si.MemTotal) * 100
+			}
+			vramColor := colorGreen
+			switch {
+			case vramPct >= 80:
+				vramColor = colorRed
+			case vramPct >= 50:
+				vramColor = colorAmber
+			}
+			name := truncate(rm.Name, 18)
+			extra := ""
+			if rm.SizeRAM > 0 {
+				extra = styleDim.Render(" +" + monitor.FormatMemory(rm.SizeRAM) + " ram")
+			}
+			line := styleText.Render(fmt.Sprintf("  %-18s ", name)) +
+				miniBar(vramPct, 8) + " " +
+				lipgloss.NewStyle().Foreground(vramColor).Render(fmt.Sprintf("%-9s", monitor.FormatMemory(rm.SizeVRAM))) +
+				extra
+			lines = append(lines, line)
+		}
+	}
+
+	// Status insight at the bottom
+	switch {
+	case ramPct >= 85:
+		lines = append(lines, styleWarn.Render("• RAM critical – unload models or restart Ollama"))
+	case ramPct >= 70:
+		lines = append(lines, styleText.Render("• RAM high – keep-alive settings may need review"))
+	case metrics.DiskUsagePct >= 90:
+		lines = append(lines, styleBad.Render("• Disk critical – free space immediately"))
+	case metrics.DiskUsagePct >= 80:
+		lines = append(lines, styleWarn.Render("• Disk high – old models may need cleanup"))
+	default:
+		lines = append(lines, styleGood.Render("• RAM usage is comfortable"))
+	}
+
+	return lines
 }
 
 func (m Model) generateInsights(metrics *monitor.SystemMetrics) []string {

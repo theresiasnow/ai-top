@@ -17,6 +17,7 @@ type SystemMetrics struct {
 	SysInfo       SystemInfo
 	DiskUsagePct  float64
 	OllamaLogs    []string
+	RunningModels []RunningModel // models currently loaded in memory
 }
 
 type OpenClawStatus struct {
@@ -38,6 +39,14 @@ type ModelInfo struct {
 	SizeBytes int64
 	Modified  time.Time
 	Loaded    bool
+}
+
+// RunningModel represents a model currently loaded in memory by Ollama.
+type RunningModel struct {
+	Name      string
+	SizeVRAM  uint64    // bytes in GPU/unified memory
+	SizeRAM   uint64    // bytes in CPU RAM (size - size_vram)
+	ExpiresAt time.Time // when Ollama will unload it if idle
 }
 
 type CronJob struct {
@@ -111,6 +120,11 @@ func (m *Monitor) GetMetrics() *SystemMetrics {
 		copy(snapshot.OllamaLogs, m.metrics.OllamaLogs)
 	}
 
+	if m.metrics.RunningModels != nil {
+		snapshot.RunningModels = make([]RunningModel, len(m.metrics.RunningModels))
+		copy(snapshot.RunningModels, m.metrics.RunningModels)
+	}
+
 	return &snapshot
 }
 
@@ -126,15 +140,20 @@ func (m *Monitor) Refresh() error {
 	// Ollama status
 	running := m.Ollama.IsRunning()
 	models := []ModelInfo{}
+	var runningModels []RunningModel
 	if running {
 		if modelList, err := m.Ollama.GetModels(); err == nil {
 			models = modelList
+		}
+		if rm, err := m.Ollama.GetRunningModels(); err == nil {
+			runningModels = rm
 		}
 	}
 	m.metrics.Ollama = OllamaStatus{
 		Running: running,
 		Models:  models,
 	}
+	m.metrics.RunningModels = runningModels
 
 	// Processes — single enumeration for both list and ollama process
 	if procs, ollamaProc, err := m.GetAllProcesses(); err == nil {
