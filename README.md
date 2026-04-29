@@ -2,6 +2,8 @@
 
 A modern, btop-inspired TUI monitor for AI development environments. Built in Go for speed and efficiency.
 
+![ai-top screenshot](docs/screenshot.gif)
+
 ## Features
 
 ✅ **Real-time Process Monitoring**
@@ -42,22 +44,15 @@ A modern, btop-inspired TUI monitor for AI development environments. Built in Go
 ### Build from source
 
 ```bash
-cd ~/projects/private/ai-top
-go build -o bin/ai-top ./cmd/ai-top
-./bin/ai-top
+git clone https://github.com/theresiasnow/ai-top.git
+cd ai-top
+make install
 ```
 
-### Add to PATH
+Or run directly:
 
 ```bash
-sudo cp ~/projects/private/ai-top/bin/ai-top /usr/local/bin/
-ai-top
-```
-
-Or create a symlink:
-
-```bash
-ln -s ~/projects/private/ai-top/bin/ai-top ~/.local/bin/ai-top
+make run
 ```
 
 ## Usage
