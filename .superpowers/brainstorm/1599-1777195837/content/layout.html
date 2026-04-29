@@ -1,0 +1,108 @@
+<style>
+  .tui {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 12px;
+    background: #0d1117;
+    color: #ccc;
+    border-radius: 6px;
+    padding: 8px;
+    white-space: pre;
+    line-height: 1.4;
+    overflow: hidden;
+  }
+  .tui .cyan { color: #00C8FF; }
+  .tui .green { color: #60FF60; }
+  .tui .red { color: #FF4444; }
+  .tui .amber { color: #FFB300; }
+  .tui .blue { color: #7AAFFF; }
+  .tui .dim { color: #445566; }
+  .tui .sel { background: #00C8FF; color: #000; }
+  .tui .tab-on { background: #00C8FF; color: #000; padding: 0 4px; }
+  .tui .tab-off { color: #445566; padding: 0 4px; }
+  .card-image { padding: 12px; }
+  .card-body { padding: 0 12px 12px; }
+  h3 { margin: 0 0 4px; }
+</style>
+
+<h2>What layout should ai-top use?</h2>
+<p class="subtitle">Three approaches to the btop look-and-feel</p>
+
+<div class="cards">
+
+  <!-- Option A: Enhanced current (single pane + row selection) -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="card-image">
+      <div class="tui"><span class="cyan">⟨ ai-top ⟩</span>  AI Dev Monitor                    Sun 11:30:01
+  <span class="green">● OpenClaw</span>  pid 5063 · 548MB · up 3h2m    <span class="green">● Ollama</span>  4 models
+
+<span class="dim">╭─</span><span class="tab-on"> 1:Node.js </span><span class="tab-off"> 2:Ollama </span><span class="tab-off"> 3:OpenClaw </span><span class="tab-off"> 4:Cron </span><span class="dim">─────────────── sort:mem ─╮</span>
+<span class="dim">│</span> <span class="dim">──────────────────────────────────────────────────────────</span> <span class="dim">│</span>
+<span class="dim">│</span> <span class="blue">PID      NAME            USER    CPU              MEMORY  </span> <span class="dim">│</span>
+<span class="dim">│</span> <span class="dim">──────────────────────</span>                                     <span class="dim">│</span>
+<span class="dim">│</span> 39217    <span class="cyan">node</span>            tess    <span class="green">░░░░░░░░</span>  0.0%   548.8MB <span class="dim">│</span>
+<span class="dim">│</span> <span class="sel"> 85707    node            tess    ██░░░░░░  12.3%   97.8MB </span> <span class="dim">│</span>
+<span class="dim">│</span> 85806    node            tess    <span class="green">░░░░░░░░</span>  0.0%    84.1MB <span class="dim">│</span>
+<span class="dim">│</span> 81616    node            tess    <span class="amber">████░░░░</span>  42.1%   11.3MB <span class="dim">│</span>
+<span class="dim">│</span>                                                             <span class="dim">│</span>
+<span class="dim">│</span>  <span class="amber">⚡ Kill</span>  <span class="green">↺ Restart</span>  selected: PID 85707               <span class="dim">│</span>
+<span class="dim">╰────────────────────────────────────────────────────────────╯</span>
+  <span class="cyan">Tab/1-4</span><span class="dim">:switch</span>  <span class="cyan">↑↓</span><span class="dim">:select</span>  <span class="cyan">k</span><span class="dim">:kill</span>  <span class="cyan">r</span><span class="dim">:restart</span>  <span class="cyan">q</span><span class="dim">:quit</span></div>
+    </div>
+    <div class="card-body">
+      <h3>Enhanced single-pane</h3>
+      <p>Keep the tab layout, add arrow-key row selection and a kill/restart action bar. Minimal change, focused interactions. Like htop but tab-separated by service.</p>
+    </div>
+  </div>
+
+  <!-- Option B: btop split panes -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="card-image">
+      <div class="tui"><span class="cyan">⟨ ai-top ⟩</span>  AI Dev Monitor                    Sun 11:30:01
+
+<span class="dim">╭─ Services ──────────────────╮╭─ 1:Node.js ──── sort:mem ─╮</span>
+<span class="dim">│</span> <span class="green">● OpenClaw</span>  548MB  up 3h2m  <span class="dim">││</span> <span class="blue">PID   NAME      CPU    MEM  </span> <span class="dim">│</span>
+<span class="dim">│</span> <span class="green">● Ollama</span>    4 models        <span class="dim">││</span> 39217 node    0.0%  548MB  <span class="dim">│</span>
+<span class="dim">│</span>                              <span class="dim">││</span> <span class="sel"> 85707 node   12.3%   97MB </span> <span class="dim">│</span>
+<span class="dim">╰──────────────────────────────╯│</span> 85806 node    0.0%   84MB  <span class="dim">│</span>
+<span class="dim">╭─ Ollama models ──────────────╮│</span> 81616 node   42.1%   11MB  <span class="dim">│</span>
+<span class="dim">│</span> qwen2.5-coder:14b  <span class="green">🔥 hot</span>    <span class="dim">││</span>                             <span class="dim">│</span>
+<span class="dim">│</span> gemma4:latest      <span class="green">🔥 hot</span>    <span class="dim">││</span>  <span class="amber">⚡ k:kill</span>  <span class="green">↺ r:restart</span>    <span class="dim">│</span>
+<span class="dim">│</span> qwen3:8b           <span class="amber">🌡 warm</span>   <span class="dim">│╰────────────────────────────╯</span>
+<span class="dim">╰──────────────────────────────╯</span>
+  <span class="cyan">Tab</span><span class="dim">:focus panel</span>  <span class="cyan">↑↓</span><span class="dim">:select</span>  <span class="cyan">k</span><span class="dim">:kill</span>  <span class="cyan">r</span><span class="dim">:restart</span>  <span class="cyan">q</span><span class="dim">:quit</span></div>
+    </div>
+    <div class="card-body">
+      <h3>btop split-pane</h3>
+      <p>Services + Ollama models always visible on the left. Process list on the right with arrow selection. Tab switches focus between panels. Most btop-like.</p>
+    </div>
+  </div>
+
+  <!-- Option C: Full btop-style top/bottom split -->
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="card-image">
+      <div class="tui"><span class="cyan">⟨ ai-top ⟩</span>  AI Dev Monitor                    Sun 11:30:01
+
+<span class="dim">╭─ OpenClaw ──────────────────╮╭─ Ollama ───────────────────╮</span>
+<span class="dim">│</span> <span class="green">● online</span>  pid 5063  548MB   <span class="dim">││</span> <span class="green">● online</span>  4 models loaded   <span class="dim">│</span>
+<span class="dim">│</span> up 3h 2m                     <span class="dim">││</span> qwen2.5-coder <span class="green">🔥</span>  gemma4 <span class="green">🔥</span> <span class="dim">│</span>
+<span class="dim">╰──────────────────────────────╯╰────────────────────────────╯</span>
+<span class="dim">╭─ Processes ─────────────────────────────── 34 procs ─ mem ─╮</span>
+<span class="dim">│</span> <span class="blue">PID      NAME                 USER    CPU              MEM  </span> <span class="dim">│</span>
+<span class="dim">│</span> <span class="dim">──────────────────────────────────────────────────────────</span>   <span class="dim">│</span>
+<span class="dim">│</span> 39217    node                 tess   <span class="green">░░░░░░░░</span>  0.0%  548MB  <span class="dim">│</span>
+<span class="dim">│</span> <span class="sel"> 85707    node                 tess   ██░░░░░░ 12.3%   97MB </span> <span class="dim">│</span>
+<span class="dim">│</span> 85806    node                 tess   <span class="green">░░░░░░░░</span>  0.0%   84MB  <span class="dim">│</span>
+<span class="dim">│</span>  <span class="amber">⚡ k:kill</span>  <span class="green">↺ r:restart</span>  <span class="dim">selected: PID 85707 · node</span>         <span class="dim">│</span>
+<span class="dim">╰────────────────────────────────────────────────────────────╯</span>
+  <span class="cyan">↑↓</span><span class="dim">:select</span>  <span class="cyan">k</span><span class="dim">:kill</span>  <span class="cyan">r</span><span class="dim">:restart</span>  <span class="cyan">m/c/s</span><span class="dim">:sort</span>  <span class="cyan">q</span><span class="dim">:quit</span></div>
+    </div>
+    <div class="card-body">
+      <h3>Always-on status bar + process list</h3>
+      <p>Top row always shows OpenClaw + Ollama status side-by-side (no tab needed). Bottom is a full-height process list with row selection. Closest to classic btop top-stats + bottom-list.</p>
+    </div>
+  </div>
+
+</div>

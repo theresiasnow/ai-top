@@ -126,15 +126,11 @@ func (m *Monitor) Refresh() error {
 		Running: running,
 		Models:  models,
 	}
-	if ollamaProcess, ok := GetOllamaProcess(); ok {
-		m.metrics.OllamaProcess = &ollamaProcess
-	} else {
-		m.metrics.OllamaProcess = nil
-	}
 
-	// Processes
-	if processes, err := m.GetAllProcesses(); err == nil {
-		m.metrics.Processes = processes
+	// Processes — single enumeration for both list and ollama process
+	if procs, ollamaProc, err := m.GetAllProcesses(); err == nil {
+		m.metrics.Processes = procs
+		m.metrics.OllamaProcess = ollamaProc
 	}
 
 	// Update timestamp

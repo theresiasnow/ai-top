@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -421,33 +422,21 @@ func sortProcesses(processes []monitor.ProcessInfo, sortBy string) {
 }
 
 func sortByCPU(processes []monitor.ProcessInfo) {
-	for i := 0; i < len(processes); i++ {
-		for j := i + 1; j < len(processes); j++ {
-			if processes[j].CPU > processes[i].CPU {
-				processes[i], processes[j] = processes[j], processes[i]
-			}
-		}
-	}
+	sort.Slice(processes, func(i, j int) bool {
+		return processes[i].CPU > processes[j].CPU
+	})
 }
 
 func sortByMemory(processes []monitor.ProcessInfo) {
-	for i := 0; i < len(processes); i++ {
-		for j := i + 1; j < len(processes); j++ {
-			if processes[j].Memory > processes[i].Memory {
-				processes[i], processes[j] = processes[j], processes[i]
-			}
-		}
-	}
+	sort.Slice(processes, func(i, j int) bool {
+		return processes[i].Memory > processes[j].Memory
+	})
 }
 
 func sortByName(processes []monitor.ProcessInfo) {
-	for i := 0; i < len(processes); i++ {
-		for j := i + 1; j < len(processes); j++ {
-			if processes[j].Name < processes[i].Name {
-				processes[i], processes[j] = processes[j], processes[i]
-			}
-		}
-	}
+	sort.Slice(processes, func(i, j int) bool {
+		return processes[i].Name < processes[j].Name
+	})
 }
 
 func selectableCount(items []ListItem) int {

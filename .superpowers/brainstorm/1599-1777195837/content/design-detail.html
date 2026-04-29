@@ -1,0 +1,71 @@
+<style>
+  .tui {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 12px;
+    background: #0d1117;
+    color: #ccc;
+    border-radius: 6px;
+    padding: 10px 12px;
+    white-space: pre;
+    line-height: 1.5;
+  }
+  .tui .cyan  { color: #00C8FF; }
+  .tui .green { color: #60FF60; }
+  .tui .red   { color: #FF4444; }
+  .tui .amber { color: #FFB300; }
+  .tui .blue  { color: #7AAFFF; }
+  .tui .dim   { color: #445566; }
+  .tui .sel   { background: #1a3a4a; color: #fff; display: inline-block; width: 100%; }
+  .tui .section-head { color: #445566; }
+  .annotation {
+    font-family: sans-serif;
+    font-size: 12px;
+    color: #888;
+    margin: 8px 0 0 4px;
+  }
+  .annotation span { color: #00C8FF; font-weight: bold; }
+</style>
+
+<h2>ai-top — detailed layout design</h2>
+<p class="subtitle">Does this look right? Let me know what to change.</p>
+
+<div class="mockup">
+  <div class="mockup-header">Full screen (approx 100×28)</div>
+  <div class="mockup-body">
+<div class="tui"><span class="cyan">⟨ ai-top ⟩</span>  AI Dev Monitor                                          Sun 11:30:01
+<span class="dim">╭─ OpenClaw ──────────────────────────────╮╭─ Ollama ─────────────────────────────────╮</span>
+<span class="dim">│</span> <span class="green">● online</span>  pid 5063 · 548.8MB · up 3h2m  <span class="dim">││</span> <span class="green">● online</span>  4 models · 22.5GB loaded      <span class="dim">│</span>
+<span class="dim">│</span> 7 openclaw procs                         <span class="dim">││</span> <span class="green">qwen2.5-coder</span> <span class="green">🔥</span>  <span class="green">gemma4</span> <span class="green">🔥</span>  <span class="amber">qwen3</span> <span class="amber">🌡</span>   <span class="dim">│</span>
+<span class="dim">╰─────────────────────────────────────────╯╰──────────────────────────────────────────╯</span>
+<span class="dim">╭─ Processes ───────────────────────────────────── 34 procs · sorted: mem ─────────────╮</span>
+<span class="dim">│</span> <span class="blue">     NAME                          SIZE / USER    CPU              MEMORY             </span> <span class="dim">│</span>
+<span class="dim">│</span> <span class="dim">────────────────────────────────────────────────────────────────────────────────────</span>  <span class="dim">│</span>
+<span class="dim">│</span> <span class="dim">── Ollama models ──────────────────────────────────────────────────────────────────</span>   <span class="dim">│</span>
+<span class="dim">│</span>   qwen2.5-coder:14b                8.4GB          <span class="green">🔥 hot</span>          <span class="green">● loaded</span>            <span class="dim">│</span>
+<span class="dim">│</span>   gemma4:latest                    8.9GB          <span class="green">🔥 hot</span>          <span class="green">● loaded</span>            <span class="dim">│</span>
+<span class="dim">│</span>   qwen3:8b                         4.9GB          <span class="amber">🌡 warm</span>         <span class="green">● loaded</span>            <span class="dim">│</span>
+<span class="dim">│</span>   nomic-embed-text:latest          261MB          <span class="dim">❄ cold</span>          <span class="green">● loaded</span>            <span class="dim">│</span>
+<span class="dim">│</span>   <span class="dim">── ollama process ─────────────────────────────────────────────────────────────</span>   <span class="dim">│</span>
+<span class="dim">│</span>   ollama                           <span class="dim">system</span>         <span class="green">░░░░░░░░</span>  0.2%   <span class="amber">██████░░</span>  22.5GB   <span class="dim">│</span>
+<span class="dim">│</span> <span class="dim">── OpenClaw processes ─────────────────────────────────────────────────────────────</span>   <span class="dim">│</span>
+<span class="dim">│</span>   39217  node                      tess           <span class="green">░░░░░░░░</span>  0.0%   <span class="amber">███░░░░░</span> 548.8MB   <span class="dim">│</span>
+<span class="dim">│</span><span class="sel">▶ 85707  node                      tess           ██░░░░░░ 12.3%   █░░░░░░░  97.8MB  </span><span class="dim">│</span>
+<span class="dim">│</span>   85806  node                      tess           <span class="green">░░░░░░░░</span>  0.0%   <span class="green">░░░░░░░░</span>  84.1MB   <span class="dim">│</span>
+<span class="dim">│</span>   81616  node                      tess           <span class="amber">████░░░░</span> 42.1%   <span class="green">░░░░░░░░</span>  11.3MB   <span class="dim">│</span>
+<span class="dim">│</span>   ...                                                                                  <span class="dim">│</span>
+<span class="dim">│</span>                                                                                        <span class="dim">│</span>
+<span class="dim">│</span>  <span class="amber">⚡ k: kill  PID 85707 · node</span>    <span class="green">↺ r: SIGHUP</span>                                         <span class="dim">│</span>
+<span class="dim">╰────────────────────────────────────────────────────────────────────────────────────────╯</span>
+  <span class="cyan">↑↓</span><span class="dim">:select row</span>  <span class="cyan">k</span><span class="dim">:kill</span>  <span class="cyan">r</span><span class="dim">:restart/unload</span>  <span class="cyan">m/c/s</span><span class="dim">:sort</span>  <span class="cyan">space</span><span class="dim">:pause</span>  <span class="cyan">q</span><span class="dim">:quit</span></div>
+  </div>
+</div>
+
+<div class="annotation">
+  <span>Notes:</span><br>
+  · Ollama model rows: <strong>r</strong> unloads via API (keep_alive:0) · <strong>k</strong> also unloads (no PID to kill)<br>
+  · Ollama process row: <strong>k</strong> = SIGTERM · <strong>r</strong> = SIGHUP<br>
+  · OpenClaw process rows: <strong>k</strong> = SIGTERM · <strong>r</strong> = SIGHUP<br>
+  · Section headers (── Ollama models ──) are not selectable — cursor skips them<br>
+  · Action bar at bottom of panel shows context for currently selected row<br>
+  · Sort (m/c/s) applies only to OpenClaw processes — Ollama models stay at top
+</div>

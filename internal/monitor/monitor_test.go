@@ -6,19 +6,26 @@ import (
 
 func TestGetNodeProcesses(t *testing.T) {
 	m := NewMonitor()
-	processes, err := m.GetNodeProcesses()
+	processes, _, err := m.GetAllProcesses()
 
 	if err != nil {
-		t.Logf("GetNodeProcesses error: %v", err)
+		t.Logf("GetAllProcesses error: %v", err)
 	}
 
-	if len(processes) == 0 {
+	var nodeProcs []ProcessInfo
+	for _, p := range processes {
+		if p.Name == "node" || p.Name == "nodejs" {
+			nodeProcs = append(nodeProcs, p)
+		}
+	}
+
+	if len(nodeProcs) == 0 {
 		t.Logf("⚠️  No Node processes found - this is okay if none are running")
 		return
 	}
 
-	t.Logf("✅ Found %d Node processes", len(processes))
-	for _, p := range processes {
+	t.Logf("✅ Found %d Node processes", len(nodeProcs))
+	for _, p := range nodeProcs {
 		t.Logf("  - PID %d: %s (Memory: %s)", p.PID, p.Name, FormatMemory(p.Memory))
 	}
 }

@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build *)",
+      "Bash(ln -sf ~/Project/private/ai-top/bin/ai-top ~/.local/bin/ai-top)",
+      "Bash(ai-top --help)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}

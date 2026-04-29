@@ -11,72 +11,38 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-// GetNodeProcesses finds all Node.js processes
-func (m *Monitor) GetNodeProcesses() ([]ProcessInfo, error) {
-	return getProcessesByName([]string{"node", "nodejs"})
-}
-
-// GetOllamaProcesses finds Ollama processes
-func (m *Monitor) GetOllamaProcesses() ([]ProcessInfo, error) {
-	return getProcessesByName([]string{"ollama"})
-}
-
-// GetAllProcesses returns all monitored processes
-func (m *Monitor) GetAllProcesses() ([]ProcessInfo, error) {
-	var all []ProcessInfo
-
-	node, err := m.GetNodeProcesses()
-	if err == nil {
-		all = append(all, node...)
+// GetAllProcesses returns all monitored processes and the first ollama process,
+// enumerating system processes exactly once.
+func (m *Monitor) GetAllProcesses() (all []ProcessInfo, ollamaProc *ProcessInfo, err error) {
+	watched := map[string]bool{
+		"node": true, "nodejs": true, "ollama": true,
 	}
 
-	ollama, err := m.GetOllamaProcesses()
-	if err == nil {
-		all = append(all, ollama...)
-	}
-
-	return all, nil
-}
-
-// GetOllamaProcess returns the first running Ollama process.
-func GetOllamaProcess() (ProcessInfo, bool) {
-	processes, err := getProcessesByName([]string{"ollama"})
-	if err != nil || len(processes) == 0 {
-		return ProcessInfo{}, false
-	}
-	return processes[0], true
-}
-
-// getProcessesByName finds processes by executable name
-func getProcessesByName(names []string) ([]ProcessInfo, error) {
-	nameMap := make(map[string]bool)
-	for _, name := range names {
-		nameMap[name] = true
-	}
-
-	processes, err := process.Processes()
+	procs, err := process.Processes()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	var results []ProcessInfo
-
-	for _, p := range processes {
-		name, err := p.Name()
-		if err != nil {
+	for _, p := range procs {
+		name, nameErr := p.Name()
+		if nameErr != nil {
 			continue
 		}
-
-		// Check exact match and basename match
-		if nameMap[name] || nameMap[strings.TrimSuffix(name, ".exe")] {
-			info, err := getProcessInfo(p)
-			if err == nil {
-				results = append(results, info)
-			}
+		base := strings.TrimSuffix(name, ".exe")
+		if !watched[name] && !watched[base] {
+			continue
+		}
+		info, infoErr := getProcessInfo(p)
+		if infoErr != nil {
+			continue
+		}
+		all = append(all, info)
+		if ollamaProc == nil && (name == "ollama" || base == "ollama") {
+			cp := info
+			ollamaProc = &cp
 		}
 	}
-
-	return results, nil
+	return all, ollamaProc, nil
 }
 
 // getProcessInfo extracts detailed info from a process
