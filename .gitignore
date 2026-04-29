@@ -1,0 +1,29 @@
+# Binaries
+bin/
+*.exe
+
+# Build artifacts
+*.o
+*.a
+*.so
+
+# Test binary
+*.test
+
+# Go workspace
+go.work
+go.work.sum
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local overrides (may contain personal tool permissions)
+.claude/settings.local.json
+.superpowers/

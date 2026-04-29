@@ -14,6 +14,9 @@ type SystemMetrics struct {
 	CronJobs      []CronJob
 	Processes     []ProcessInfo
 	UpdatedAt     time.Time
+	SysInfo       SystemInfo
+	DiskUsagePct  float64
+	OllamaLogs    []string
 }
 
 type OpenClawStatus struct {
@@ -30,10 +33,11 @@ type OllamaStatus struct {
 }
 
 type ModelInfo struct {
-	Name     string
-	Size     string
-	Modified time.Time
-	Loaded   bool
+	Name      string
+	Size      string
+	SizeBytes int64
+	Modified  time.Time
+	Loaded    bool
 }
 
 type CronJob struct {
@@ -102,6 +106,11 @@ func (m *Monitor) GetMetrics() *SystemMetrics {
 		snapshot.OllamaProcess = &ollamaProcess
 	}
 
+	if m.metrics.OllamaLogs != nil {
+		snapshot.OllamaLogs = make([]string, len(m.metrics.OllamaLogs))
+		copy(snapshot.OllamaLogs, m.metrics.OllamaLogs)
+	}
+
 	return &snapshot
 }
 
@@ -136,6 +145,17 @@ func (m *Monitor) Refresh() error {
 	// Update timestamp
 	m.metrics.UpdatedAt = time.Now()
 
+	// System info + disk
+	if sysInfo, err := GetSystemInfo(); err == nil {
+		m.metrics.SysInfo = sysInfo
+	}
+	if pct, err := OllamaModelsDiskUsagePct(); err == nil {
+		m.metrics.DiskUsagePct = pct
+	}
+
+	// Ollama logs (tail)
+	m.metrics.OllamaLogs = ReadOllamaLogs(8)
+
 	return nil
 }
 
@@ -146,15 +166,24 @@ func (m *Monitor) StartAutoRefresh() {
 		defer ticker.Stop()
 
 		for range ticker.C {
-			if err := m.Refresh(); err != nil {
-				fmt.Printf("Monitor refresh error: %v\n", err)
-			}
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						fmt.Printf("Monitor refresh panic: %v\n", r)
+					}
+				}()
+				if err := m.Refresh(); err != nil {
+					fmt.Printf("Monitor refresh error: %v\n", err)
+				}
+			}()
 		}
 	}()
 }
 
 // GetRefreshRate returns the refresh interval
 func (m *Monitor) GetRefreshRate() time.Duration {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.refreshRate
 }
 

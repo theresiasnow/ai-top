@@ -63,7 +63,8 @@ func (oc *OllamaClient) GetModels() ([]ModelInfo, error) {
 		models = append(models, ModelInfo{
 			Name:      m.Name,
 			Size:      FormatMemory(uint64(m.Size)),
-			Modified:  time.Now(), // Ollama API doesn't provide modification time
+			SizeBytes: m.Size,
+			Modified:  time.Now(),
 			Loaded:    true,
 		})
 	}

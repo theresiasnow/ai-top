@@ -130,13 +130,39 @@ func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
 		return "Loading..."
 	}
+	if m.mon == nil {
+		return "No monitor"
+	}
 
 	metrics := m.mon.GetMetrics()
+
+	// Layout constants (terminal lines):
+	//   status bar:    4   separator: 1
+	//   insights:      insightBoxRows+2   separator: 1  (optional)
+	//   process panel: contentHeight+2   separator: 1
+	//   footer:        1
+	const fixedOverhead = 4 + 1 + 2 + 1 + 1 // 9  (no insights)
+	const insightOverhead = insightBoxRows + 2 + 1 // 9
+	const minProcRows = 4
+
+	showInsights := m.height >= fixedOverhead+insightOverhead+minProcRows
+	overhead := fixedOverhead
+	if showInsights {
+		overhead += insightOverhead
+	}
+	contentHeight := m.height - overhead
+	if contentHeight < minProcRows {
+		contentHeight = minProcRows
+	}
 
 	var sb strings.Builder
 	sb.WriteString(m.renderStatusBar(metrics))
 	sb.WriteString("\n")
-	sb.WriteString(m.renderProcessPanel(metrics))
+	if showInsights {
+		sb.WriteString(m.renderInsightsAndLogs(metrics))
+		sb.WriteString("\n")
+	}
+	sb.WriteString(m.renderProcessPanel(metrics, contentHeight))
 	sb.WriteString("\n")
 	sb.WriteString(m.renderFooter())
 
@@ -300,10 +326,17 @@ func renderSmallBox(title string, width int, lines []string) []string {
 	if width < 20 {
 		width = 20
 	}
+	line0, line1 := "", ""
+	if len(lines) > 0 {
+		line0 = lines[0]
+	}
+	if len(lines) > 1 {
+		line1 = lines[1]
+	}
 	return []string{
 		boxTop(title, "", width),
-		boxLine(lines[0], width),
-		boxLine(lines[1], width),
+		boxLine(line0, width),
+		boxLine(line1, width),
 		boxBottom(width),
 	}
 }
@@ -317,13 +350,101 @@ func formatUptime(d time.Duration) string {
 	return fmt.Sprintf("%dm", mn)
 }
 
-func (m Model) renderProcessPanel(metrics *monitor.SystemMetrics) string {
+func (m Model) renderInsightsAndLogs(metrics *monitor.SystemMetrics) string {
+	w := max(41, m.width)
+	gap := 1
+	leftW := (w - gap) / 2
+	rightW := w - gap - leftW
+
+	insightLines := m.generateInsights(metrics)
+	logLines := m.ollamaLogLines(metrics)
+
+	leftBox := m.renderTextBox(styleTitle.Render(" Operational Insights "), leftW, insightLines)
+	rightBox := m.renderTextBox(styleTitle.Render(" Ollama Logs "), rightW, logLines)
+
+	var lines []string
+	for i := range leftBox {
+		lines = append(lines, leftBox[i]+" "+rightBox[i])
+	}
+	return strings.Join(lines, "\n")
+}
+
+const insightBoxRows = 6 // content rows inside the box
+
+func (m Model) renderTextBox(title string, width int, lines []string) []string {
+	if width < 20 {
+		width = 20
+	}
+	out := []string{boxTop(title, "", width)}
+	for i := 0; i < insightBoxRows; i++ {
+		content := ""
+		if i < len(lines) {
+			content = lines[i]
+		}
+		out = append(out, boxLine(content, width))
+	}
+	out = append(out, boxBottom(width))
+	return out
+}
+
+func (m Model) generateInsights(metrics *monitor.SystemMetrics) []string {
+	var lines []string
+
+	ramPct := float64(metrics.SysInfo.MemPercent)
+	switch {
+	case ramPct >= 85:
+		lines = append(lines, styleWarn.Render("• RAM critically high. Unload models or restart Ollama."))
+	case ramPct >= 70:
+		lines = append(lines, styleText.Render("• RAM usage is moderately high. Keep-alive")+
+			styleText.Render(" settings may need review."))
+	}
+
+	switch {
+	case metrics.DiskUsagePct >= 90:
+		lines = append(lines, styleBad.Render("• Disk usage critical. Free space immediately."))
+	case metrics.DiskUsagePct >= 80:
+		lines = append(lines, styleWarn.Render("• Disk usage is approaching a critical")+
+			styleWarn.Render(" threshold. Old models may need cleanup."))
+	}
+
+	var largestName string
+	var largestBytes int64
+	for _, model := range metrics.Ollama.Models {
+		if model.SizeBytes > largestBytes {
+			largestBytes = model.SizeBytes
+			largestName = model.Name
+		}
+	}
+	if largestName != "" {
+		lines = append(lines, styleText.Render(fmt.Sprintf("• Largest installed model: %s (%s)",
+			largestName, monitor.FormatMemory(uint64(largestBytes)))))
+	}
+
+	if !metrics.Ollama.Running {
+		lines = append(lines, styleDim.Render("• Ollama is not running."))
+	} else if len(metrics.Ollama.Models) == 0 {
+		lines = append(lines, styleDim.Render("• No active in-memory model is visible right now."))
+	}
+
+	if len(lines) == 0 {
+		lines = append(lines, styleGood.Render("• System looks healthy."))
+	}
+	return lines
+}
+
+func (m Model) ollamaLogLines(metrics *monitor.SystemMetrics) []string {
+	path := monitor.OllamaLogPath()
+	lines := []string{styleDim.Render(path)}
+	for _, l := range metrics.OllamaLogs {
+		lines = append(lines, styleText.Render(l))
+	}
+	return lines
+}
+
+
+func (m Model) renderProcessPanel(metrics *monitor.SystemMetrics, contentHeight int) string {
 	w := max(40, m.width)
 	innerW := w - 4
-	contentHeight := m.height - 8
-	if contentHeight < 5 {
-		contentHeight = 5
-	}
 
 	items := m.list.items
 	list := m.list
@@ -332,9 +453,19 @@ func (m Model) renderProcessPanel(metrics *monitor.SystemMetrics) string {
 		list.SetItems(items)
 	}
 
-	count := selectableCount(items)
-	sortIndicator := styleDim.Render(fmt.Sprintf(" %d procs · sorted:%s ", count, sortLabel(m.sortBy)))
 	lines := list.Render(innerW, contentHeight)
+
+	above, below := list.ScrollInfo()
+	scrollHint := ""
+	if above > 0 {
+		scrollHint += styleWarn.Render(fmt.Sprintf(" ↑%d", above))
+	}
+	if below > 0 {
+		scrollHint += styleWarn.Render(fmt.Sprintf(" ↓%d", below))
+	}
+
+	count := selectableCount(items)
+	sortIndicator := styleDim.Render(fmt.Sprintf(" %d procs · sorted:%s ", count, sortLabel(m.sortBy))) + scrollHint
 
 	var sb strings.Builder
 	sb.WriteString(boxTop(styleTitle.Render(" Processes "), sortIndicator, w))

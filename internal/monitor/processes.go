@@ -60,12 +60,17 @@ func getProcessInfo(p *process.Process) (ProcessInfo, error) {
 		username = u
 	}
 
+	var memRSS uint64
+	if memInfo != nil {
+		memRSS = memInfo.RSS
+	}
+
 	return ProcessInfo{
 		PID:         int(p.Pid),
 		Name:        name,
 		User:        username,
 		CPU:         cpuPercent,
-		Memory:      memInfo.RSS,
+		Memory:      memRSS,
 		MemoryPct:   memPercent,
 		StartTime:   time.UnixMilli(createTime),
 		CommandLine: cmdline,

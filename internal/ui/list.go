@@ -36,9 +36,10 @@ const (
 )
 
 type SelectableList struct {
-	items    []ListItem
-	selected int
-	offset   int
+	items       []ListItem
+	selected    int
+	offset      int
+	lastVisible int // set by Render, used by ScrollInfo
 }
 
 func (l *SelectableList) SetItems(items []ListItem) {
@@ -97,6 +98,7 @@ func (l *SelectableList) Render(innerWidth, height int) []string {
 		visibleRows = 1
 	}
 	l.clampOffset(visibleRows)
+	l.lastVisible = visibleRows
 
 	end := l.offset + visibleRows
 	if end > len(l.items) {
@@ -183,6 +185,20 @@ func (l *SelectableList) actionBar(innerWidth int) string {
 		text = "  no selectable rows"
 	}
 	return styleWarn.Render(truncate(text, innerWidth))
+}
+
+// ScrollInfo returns the number of items hidden above and below the viewport.
+func (l *SelectableList) ScrollInfo() (above, below int) {
+	above = l.offset
+	end := l.offset + l.lastVisible
+	if end > len(l.items) {
+		end = len(l.items)
+	}
+	below = len(l.items) - end
+	if below < 0 {
+		below = 0
+	}
+	return
 }
 
 func (l *SelectableList) move(delta int) {
