@@ -24,6 +24,7 @@ type ListItem struct {
 	Memory    uint64
 	MemoryPct float32
 	Extra     string
+	Loaded    bool // for KindOllamaModel: true = in VRAM, false = on disk
 }
 
 type Action int
@@ -166,7 +167,18 @@ func (l *SelectableList) renderItem(index int, item ListItem, innerWidth int) st
 
 	if item.Kind == KindOllamaModel {
 		cpuStr := lipgloss.NewStyle().Width(cpuW).Render(modelHeat(item.ModelName))
-		memStr := lipgloss.NewStyle().Width(memW).Render(styleGood.Render("● loaded"))
+		var memStr string
+		if item.Loaded {
+			memStr = lipgloss.NewStyle().Width(memW).Render(
+				styleGood.Render("▶ ") + memBar(item.Memory, item.MemoryPct))
+		} else {
+			sizeInfo := item.Extra
+			if sizeInfo == "" {
+				sizeInfo = "on disk"
+			}
+			memStr = lipgloss.NewStyle().Width(memW).Render(
+				styleDim.Render("○ " + sizeInfo))
+		}
 		return cursor + " " + nameStr + "  " + extraStr + "  " + cpuStr + "  " + memStr
 	}
 

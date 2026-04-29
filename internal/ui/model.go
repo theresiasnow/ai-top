@@ -564,14 +564,47 @@ func (m Model) renderProcessPanel(metrics *monitor.SystemMetrics, contentHeight 
 func (m Model) buildListItems(metrics *monitor.SystemMetrics) []ListItem {
 	var items []ListItem
 
-	if len(metrics.Ollama.Models) > 0 {
-		items = append(items, ListItem{Kind: KindSectionHead, Label: "Ollama models"})
-		for _, model := range metrics.Ollama.Models {
+	// Build a set of currently loaded model names from /api/ps
+	loadedMap := make(map[string]monitor.RunningModel)
+	for _, rm := range metrics.RunningModels {
+		loadedMap[rm.Name] = rm
+	}
+
+	// Loaded in VRAM — from RunningModels (actual memory residents)
+	if len(metrics.RunningModels) > 0 {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "loaded in VRAM"})
+		for _, rm := range metrics.RunningModels {
+			vramPct := float32(0)
+			if metrics.SysInfo.MemTotal > 0 {
+				vramPct = float32(float64(rm.SizeVRAM) / float64(metrics.SysInfo.MemTotal) * 100)
+			}
+			items = append(items, ListItem{
+				Kind:      KindOllamaModel,
+				Label:     rm.Name,
+				ModelName: rm.Name,
+				Memory:    rm.SizeVRAM,
+				MemoryPct: vramPct,
+				Loaded:    true,
+			})
+		}
+	}
+
+	// On disk — installed models not currently in VRAM
+	var diskModels []monitor.ModelInfo
+	for _, model := range metrics.Ollama.Models {
+		if _, isLoaded := loadedMap[model.Name]; !isLoaded {
+			diskModels = append(diskModels, model)
+		}
+	}
+	if len(diskModels) > 0 {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "on disk"})
+		for _, model := range diskModels {
 			items = append(items, ListItem{
 				Kind:      KindOllamaModel,
 				Label:     model.Name,
 				ModelName: model.Name,
 				Extra:     model.Size,
+				Loaded:    false,
 			})
 		}
 	}
