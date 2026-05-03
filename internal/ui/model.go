@@ -726,41 +726,129 @@ func (m Model) renderCronPanel(metrics *monitor.SystemMetrics, contentHeight int
 }
 
 func (m Model) renderOllamaMetricsPanel(metrics *monitor.SystemMetrics, contentHeight int) string {
-	w := max(40, m.width)
+	w := max(80, m.width)
 	innerW := w - 4
 
 	var lines []string
-	
-	// Summary metrics row
-	lines = append(lines, styleColHead.Render(fmt.Sprintf("  %-12s %-12s %-12s %-12s", "REQUESTS", "TOKENS", "AVG T/A", "CLIENTS")))
-	lines = append(lines, styleDim.Render(strings.Repeat("─", innerW)))
-	
-	// Placeholder metrics (these would be collected from Ollama logs in a real implementation)
-	metricsRow := fmt.Sprintf("  %-12s %-12s %-12s %-12s", 
-		styleText.Render("0"), 
-		styleText.Render("0"), 
-		styleText.Render("0.0"), 
-		styleText.Render("0"),
-	)
-	lines = append(lines, metricsRow)
-	
-	// Loaded models
-	if len(metrics.RunningModels) > 0 {
-		lines = append(lines, styleDim.Render(strings.Repeat("─", innerW)))
-		lines = append(lines, styleColHead.Render(fmt.Sprintf("  %-30s %-12s", "LOADED MODELS", "SIZE")))
-		lines = append(lines, styleDim.Render(strings.Repeat("─", innerW)))
-		for _, rm := range metrics.RunningModels {
-			modelLine := fmt.Sprintf("  %-30s %s", 
-				truncate(rm.Name, 28),
-				monitor.FormatMemory(rm.SizeVRAM),
-			)
-			lines = append(lines, styleText.Render(modelLine))
-		}
-	}
 
-	// Fill remaining rows
-	for len(lines) < contentHeight-2 {
+	if !metrics.Ollama.Running {
+		lines = append(lines, styleDim.Render("  Ollama is not running"))
+		for len(lines) < contentHeight-2 {
+			lines = append(lines, "")
+		}
+	} else {
+		// Top metrics summary (3 columns)
+		col1W := (innerW - 6) / 3
+		col2W := (innerW - 6) / 3
+		col3W := (innerW - 6) - col1W - col2W
+
+		// Requests / Tokens / Clients row (simulated metrics from running models)
+		requestsStr := "0"
+		tokensStr := "0"
+		clientsStr := fmt.Sprintf("%d", len(metrics.RunningModels))
+		
+		headerRow := fmt.Sprintf("  %-*s  %-*s  %-*s",
+			col1W, styleColHead.Render("REQUESTS"),
+			col2W, styleColHead.Render("TOKENS"),
+			col3W, styleColHead.Render("CLIENTS"),
+		)
+		lines = append(lines, headerRow)
+		lines = append(lines, styleDim.Render(strings.Repeat("─", innerW)))
+
+		metricsRow := fmt.Sprintf("  %-*s  %-*s  %-*s",
+			col1W, styleText.Render(requestsStr),
+			col2W, styleText.Render(tokensStr),
+			col3W, styleText.Render(clientsStr),
+		)
+		lines = append(lines, metricsRow)
 		lines = append(lines, "")
+
+		// System resources section
+		if metrics.SysInfo.MemTotal > 0 {
+			lines = append(lines, styleColHead.Render("  SYSTEM RESOURCES"))
+			lines = append(lines, styleDim.Render(strings.Repeat("─", innerW)))
+
+			// GPU info (placeholder)
+			gpuLine := "  GPU         " + miniBar(0, 20) + " 0%"
+			lines = append(lines, gpuLine)
+
+			// Memory info
+			memPct := float64(metrics.SysInfo.MemUsed) / float64(metrics.SysInfo.MemTotal) * 100
+			memLine := fmt.Sprintf("  MEMORY      %s  %s / %s",
+				miniBar(memPct, 20),
+				monitor.FormatMemory(metrics.SysInfo.MemUsed),
+				monitor.FormatMemory(metrics.SysInfo.MemTotal),
+			)
+			lines = append(lines, memLine)
+
+			// CPU info
+			cpuLine := fmt.Sprintf("  CPU         %s  %.1f%%",
+				miniBar(metrics.SysInfo.CPUUsage, 20),
+				metrics.SysInfo.CPUUsage,
+			)
+			lines = append(lines, cpuLine)
+
+			// Disk info (placeholder)
+			diskLine := fmt.Sprintf("  DISK        %s  %.1f%%",
+				miniBar(metrics.DiskUsagePct, 20),
+				metrics.DiskUsagePct,
+			)
+			lines = append(lines, diskLine)
+
+			lines = append(lines, "")
+		}
+
+		// Loaded models section
+		if len(metrics.RunningModels) > 0 {
+			lines = append(lines, styleColHead.Render(fmt.Sprintf("  LOADED MODELS (%d)", len(metrics.RunningModels))))
+			lines = append(lines, styleDim.Render(strings.Repeat("─", innerW)))
+
+			modelNameW := innerW - 20
+			for _, rm := range metrics.RunningModels {
+				modelHeatStr := ""
+				if isHotModel(rm.Name) {
+					modelHeatStr = styleGood.Render("🔥")
+				} else if isWarmModel(rm.Name) {
+					modelHeatStr = styleWarn.Render("🌡")
+				} else {
+					modelHeatStr = styleDim.Render("❄")
+				}
+
+				vramPct := float32(0)
+				if metrics.SysInfo.MemTotal > 0 {
+					vramPct = float32(float64(rm.SizeVRAM) / float64(metrics.SysInfo.MemTotal) * 100)
+				}
+
+				modelLine := fmt.Sprintf("  %s %-*s  %s",
+					modelHeatStr,
+					modelNameW-2,
+					truncate(rm.Name, modelNameW-3),
+					memBar(rm.SizeVRAM, vramPct),
+				)
+				lines = append(lines, modelLine)
+			}
+
+			lines = append(lines, "")
+		}
+
+		// Ollama process info
+		if metrics.OllamaProcess != nil {
+			lines = append(lines, styleColHead.Render("  OLLAMA PROCESS"))
+			lines = append(lines, styleDim.Render(strings.Repeat("─", innerW)))
+
+			processLine := fmt.Sprintf("  PID %d  Memory: %s  CPU: %.1f%%",
+				metrics.OllamaProcess.PID,
+				monitor.FormatMemory(metrics.OllamaProcess.Memory),
+				metrics.OllamaProcess.CPU,
+			)
+			lines = append(lines, processLine)
+			lines = append(lines, "")
+		}
+
+		// Fill remaining rows
+		for len(lines) < contentHeight-2 {
+			lines = append(lines, "")
+		}
 	}
 
 	var sb strings.Builder
