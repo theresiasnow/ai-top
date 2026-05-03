@@ -32,19 +32,21 @@ var (
 )
 
 type Model struct {
-	mon    *monitor.Monitor
-	width  int
-	height int
-	list   SelectableList
-	sortBy string
-	paused bool
-	errMsg string
+	mon        *monitor.Monitor
+	width      int
+	height     int
+	list       SelectableList
+	sortBy     string
+	paused     bool
+	errMsg     string
+	currentTab int // 1: Node.js, 2: Ollama Models, 3: OpenClaw, 4: Cron, 5: Ollama Metrics
 }
 
 func NewModel(mon *monitor.Monitor) Model {
 	return Model{
-		mon:    mon,
-		sortBy: "memory",
+		mon:        mon,
+		sortBy:     "memory",
+		currentTab: 1,
 	}
 }
 
@@ -65,17 +67,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case " ":
 			m.paused = !m.paused
+		case "1":
+			m.currentTab = 1
+			m.errMsg = ""
+		case "2":
+			m.currentTab = 2
+			m.errMsg = ""
+		case "3":
+			m.currentTab = 3
+			m.errMsg = ""
+		case "4":
+			m.currentTab = 4
+			m.errMsg = ""
+		case "5":
+			m.currentTab = 5
+			m.errMsg = ""
+		case "tab":
+			m.currentTab = m.currentTab%5 + 1
+			m.errMsg = ""
+		case "shift+tab":
+			m.currentTab = m.currentTab - 1
+			if m.currentTab < 1 {
+				m.currentTab = 5
+			}
+			m.errMsg = ""
 		case "up", "down":
-			m.list.HandleKey(msg.String())
+			if m.currentTab == 1 || m.currentTab == 2 || m.currentTab == 4 {
+				m.list.HandleKey(msg.String())
+			}
 		case "k", "r":
-			action := m.list.HandleKey(msg.String())
-			m.dispatchAction(action)
+			if m.currentTab == 1 || m.currentTab == 2 {
+				action := m.list.HandleKey(msg.String())
+				m.dispatchAction(action)
+			}
 		case "s":
-			m.sortBy = "name"
+			if m.currentTab == 1 {
+				m.sortBy = "name"
+			}
 		case "c":
-			m.sortBy = "cpu"
+			if m.currentTab == 1 {
+				m.sortBy = "cpu"
+			}
 		case "m":
-			m.sortBy = "memory"
+			if m.currentTab == 1 {
+				m.sortBy = "memory"
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -123,7 +159,20 @@ func (m *Model) syncList() {
 	if m.mon == nil {
 		return
 	}
-	m.list.SetItems(m.buildListItems(m.mon.GetMetrics()))
+	metrics := m.mon.GetMetrics()
+	
+	var items []ListItem
+	switch m.currentTab {
+	case 2:
+		items = m.buildOllamaModelItems(metrics)
+	case 3:
+		items = m.buildOpenClawItems(metrics)
+	case 4:
+		items = m.buildCronItems(metrics)
+	default: // Tab 1: Node.js processes
+		items = m.buildNodeProcessItems(metrics)
+	}
+	m.list.SetItems(items)
 }
 
 func (m Model) View() string {
@@ -140,8 +189,8 @@ func (m Model) View() string {
 	//   status bar:    4   separator: 1
 	//   insights:      insightBoxRows+2   separator: 1  (optional)
 	//   process panel: contentHeight+2   separator: 1
-	//   footer:        1
-	const fixedOverhead = 4 + 1 + 2 + 1 + 1 // 9  (no insights)
+	//   footer:        2 (tab bar + keybindings)
+	const fixedOverhead = 4 + 1 + 2 + 1 + 2 // 10  (no insights, 2-line footer)
 	const insightOverhead = insightBoxRows + 2 + 1 // 9
 	const minProcRows = 4
 
@@ -158,9 +207,23 @@ func (m Model) View() string {
 	var sb strings.Builder
 	sb.WriteString(m.renderStatusBar(metrics))
 	sb.WriteString("\n")
-	sb.WriteString(m.renderProcessPanel(metrics, contentHeight))
+
+	// Dispatch to the correct tab renderer
+	switch m.currentTab {
+	case 2:
+		sb.WriteString(m.renderOllamaModelsPanel(metrics, contentHeight))
+	case 3:
+		sb.WriteString(m.renderOpenClawPanel(metrics, contentHeight))
+	case 4:
+		sb.WriteString(m.renderCronPanel(metrics, contentHeight))
+	case 5:
+		sb.WriteString(m.renderOllamaMetricsPanel(metrics, contentHeight))
+	default: // Tab 1: Node.js processes
+		sb.WriteString(m.renderProcessPanel(metrics, contentHeight))
+	}
+
 	sb.WriteString("\n")
-	if showInsights {
+	if showInsights && m.currentTab == 1 {
 		sb.WriteString(m.renderInsightsAndLogs(metrics))
 		sb.WriteString("\n")
 	}
@@ -561,6 +624,260 @@ func (m Model) renderProcessPanel(metrics *monitor.SystemMetrics, contentHeight 
 	return sb.String()
 }
 
+func (m Model) renderOllamaModelsPanel(metrics *monitor.SystemMetrics, contentHeight int) string {
+	w := max(40, m.width)
+	innerW := w - 4
+
+	items := m.list.items
+	list := m.list
+	if len(items) == 0 {
+		items = m.buildOllamaModelItems(metrics)
+		list.SetItems(items)
+	}
+
+	lines := list.Render(innerW, contentHeight)
+
+	above, below := list.ScrollInfo()
+	scrollHint := ""
+	if above > 0 {
+		scrollHint += styleWarn.Render(fmt.Sprintf(" ↑%d", above))
+	}
+	if below > 0 {
+		scrollHint += styleWarn.Render(fmt.Sprintf(" ↓%d", below))
+	}
+
+	modelCount := len(metrics.RunningModels)
+	indicator := styleDim.Render(fmt.Sprintf(" %d loaded ", modelCount)) + scrollHint
+
+	var sb strings.Builder
+	sb.WriteString(boxTop(styleTitle.Render(" Ollama Models "), indicator, w))
+	sb.WriteString("\n")
+	for i, line := range lines {
+		if i >= contentHeight {
+			break
+		}
+		sb.WriteString(boxLine(line, w))
+		sb.WriteString("\n")
+	}
+	sb.WriteString(boxBottom(w))
+	return sb.String()
+}
+
+func (m Model) renderOpenClawPanel(metrics *monitor.SystemMetrics, contentHeight int) string {
+	w := max(40, m.width)
+	innerW := w - 4
+
+	items := m.list.items
+	list := m.list
+	if len(items) == 0 {
+		items = m.buildOpenClawItems(metrics)
+		list.SetItems(items)
+	}
+
+	lines := list.Render(innerW, contentHeight)
+
+	status := "offline"
+	if metrics.OpenClaw.Running {
+		status = "online"
+	}
+
+	var sb strings.Builder
+	sb.WriteString(boxTop(styleTitle.Render(" OpenClaw "), styleDim.Render(" "+status), w))
+	sb.WriteString("\n")
+	for i, line := range lines {
+		if i >= contentHeight {
+			break
+		}
+		sb.WriteString(boxLine(line, w))
+		sb.WriteString("\n")
+	}
+	sb.WriteString(boxBottom(w))
+	return sb.String()
+}
+
+func (m Model) renderCronPanel(metrics *monitor.SystemMetrics, contentHeight int) string {
+	w := max(40, m.width)
+	innerW := w - 4
+
+	items := m.list.items
+	list := m.list
+	if len(items) == 0 {
+		items = m.buildCronItems(metrics)
+		list.SetItems(items)
+	}
+
+	lines := list.Render(innerW, contentHeight)
+
+	jobCount := len(metrics.CronJobs)
+	indicator := styleDim.Render(fmt.Sprintf(" %d jobs ", jobCount))
+
+	var sb strings.Builder
+	sb.WriteString(boxTop(styleTitle.Render(" Cron Jobs "), indicator, w))
+	sb.WriteString("\n")
+	for i, line := range lines {
+		if i >= contentHeight {
+			break
+		}
+		sb.WriteString(boxLine(line, w))
+		sb.WriteString("\n")
+	}
+	sb.WriteString(boxBottom(w))
+	return sb.String()
+}
+
+func (m Model) renderOllamaMetricsPanel(metrics *monitor.SystemMetrics, contentHeight int) string {
+	w := max(40, m.width)
+	innerW := w - 4
+
+	var lines []string
+	
+	// Summary metrics row
+	lines = append(lines, styleColHead.Render(fmt.Sprintf("  %-12s %-12s %-12s %-12s", "REQUESTS", "TOKENS", "AVG T/A", "CLIENTS")))
+	lines = append(lines, styleDim.Render(strings.Repeat("─", innerW)))
+	
+	// Placeholder metrics (these would be collected from Ollama logs in a real implementation)
+	metricsRow := fmt.Sprintf("  %-12s %-12s %-12s %-12s", 
+		styleText.Render("0"), 
+		styleText.Render("0"), 
+		styleText.Render("0.0"), 
+		styleText.Render("0"),
+	)
+	lines = append(lines, metricsRow)
+	
+	// Loaded models
+	if len(metrics.RunningModels) > 0 {
+		lines = append(lines, styleDim.Render(strings.Repeat("─", innerW)))
+		lines = append(lines, styleColHead.Render(fmt.Sprintf("  %-30s %-12s", "LOADED MODELS", "SIZE")))
+		lines = append(lines, styleDim.Render(strings.Repeat("─", innerW)))
+		for _, rm := range metrics.RunningModels {
+			modelLine := fmt.Sprintf("  %-30s %s", 
+				truncate(rm.Name, 28),
+				monitor.FormatMemory(rm.SizeVRAM),
+			)
+			lines = append(lines, styleText.Render(modelLine))
+		}
+	}
+
+	// Fill remaining rows
+	for len(lines) < contentHeight-2 {
+		lines = append(lines, "")
+	}
+
+	var sb strings.Builder
+	sb.WriteString(boxTop(styleTitle.Render(" Ollama Metrics "), "", w))
+	sb.WriteString("\n")
+	for i, line := range lines {
+		if i >= contentHeight {
+			break
+		}
+		sb.WriteString(boxLine(line, w))
+		sb.WriteString("\n")
+	}
+	sb.WriteString(boxBottom(w))
+	return sb.String()
+}
+
+func (m Model) buildNodeProcessItems(metrics *monitor.SystemMetrics) []ListItem {
+	var items []ListItem
+	processes := metrics.Processes
+	sortProcesses(processes, m.sortBy)
+	
+	if len(processes) > 0 {
+		for _, p := range processes {
+			items = append(items, processItem(p))
+		}
+	} else {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "no processes found"})
+	}
+	return items
+}
+
+func (m Model) buildOllamaModelItems(metrics *monitor.SystemMetrics) []ListItem {
+	var items []ListItem
+
+	loadedMap := make(map[string]monitor.RunningModel)
+	for _, rm := range metrics.RunningModels {
+		loadedMap[rm.Name] = rm
+	}
+
+	if len(metrics.RunningModels) > 0 {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "loaded in VRAM"})
+		for _, rm := range metrics.RunningModels {
+			vramPct := float32(0)
+			if metrics.SysInfo.MemTotal > 0 {
+				vramPct = float32(float64(rm.SizeVRAM) / float64(metrics.SysInfo.MemTotal) * 100)
+			}
+			items = append(items, ListItem{
+				Kind:      KindOllamaModel,
+				Label:     rm.Name,
+				ModelName: rm.Name,
+				Memory:    rm.SizeVRAM,
+				MemoryPct: vramPct,
+				Loaded:    true,
+			})
+		}
+	}
+
+	var diskModels []monitor.ModelInfo
+	for _, model := range metrics.Ollama.Models {
+		if _, isLoaded := loadedMap[model.Name]; !isLoaded {
+			diskModels = append(diskModels, model)
+		}
+	}
+	if len(diskModels) > 0 {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "on disk"})
+		for _, model := range diskModels {
+			items = append(items, ListItem{
+				Kind:      KindOllamaModel,
+				Label:     model.Name,
+				ModelName: model.Name,
+				Extra:     model.Size,
+				Loaded:    false,
+			})
+		}
+	}
+
+	if len(items) == 0 {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "no models found"})
+	}
+	return items
+}
+
+func (m Model) buildOpenClawItems(metrics *monitor.SystemMetrics) []ListItem {
+	var items []ListItem
+	processes := openClawProcesses(metrics.Processes)
+	sortProcesses(processes, m.sortBy)
+	
+	if len(processes) > 0 {
+		for _, p := range processes {
+			items = append(items, processItem(p))
+		}
+	} else {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "OpenClaw offline"})
+	}
+	return items
+}
+
+func (m Model) buildCronItems(metrics *monitor.SystemMetrics) []ListItem {
+	var items []ListItem
+	
+	if len(metrics.CronJobs) > 0 {
+		for _, job := range metrics.CronJobs {
+			status := job.Status
+			if status == "" {
+				status = "unknown"
+			}
+			items = append(items, ListItem{
+				Kind:  KindSectionHead,
+				Label: fmt.Sprintf("%-30s %s %-10s", job.Name, job.Schedule, status),
+			})
+		}
+	} else {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "no cron jobs found"})
+	}
+	return items
+}
+
 func (m Model) buildListItems(metrics *monitor.SystemMetrics) []ListItem {
 	var items []ListItem
 
@@ -705,12 +1022,31 @@ func sortLabel(sortBy string) string {
 }
 
 func (m Model) renderFooter() string {
+	// Tab bar at the beginning
+	tabs := []struct{ num int; label string }{
+		{1, "Node.js"},
+		{2, "Ollama"},
+		{3, "OpenClaw"},
+		{4, "Cron"},
+		{5, "Metrics"},
+	}
+	
+	var tabParts []string
+	for _, t := range tabs {
+		tabLabel := fmt.Sprintf("[%d] %s", t.num, t.label)
+		if m.currentTab == t.num {
+			tabParts = append(tabParts, styleTitle.Render(tabLabel))
+		} else {
+			tabParts = append(tabParts, styleDim.Render(tabLabel))
+		}
+	}
+	tabBar := strings.Join(tabParts, styleDim.Render(" "))
+	
+	// Key bindings
 	type binding struct{ key, desc string }
 	bindings := []binding{
-		{"↑↓", "select row"},
-		{"k", "kill/unload"},
-		{"r", "restart/unload"},
-		{"m/c/s", "sort"},
+		{"↑↓", "select"},
+		{"k", "kill"},
 		{"Space", "pause"},
 		{"q", "quit"},
 	}
@@ -726,7 +1062,9 @@ func (m Model) renderFooter() string {
 	if m.errMsg != "" {
 		parts = append(parts, styleBad.Render(truncate(m.errMsg, 36)))
 	}
-	return "  " + strings.Join(parts, sep)
+	keybindBar := "  " + strings.Join(parts, sep)
+	
+	return tabBar + "\n" + keybindBar
 }
 
 func isHotModel(modelName string) bool {

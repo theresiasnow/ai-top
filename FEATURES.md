@@ -97,6 +97,30 @@ NAME                                        SCHEDULE             STATUS
 - Color-coded status (green for success/enabled, red for failed/disabled)
 - Requires properly formatted jobs.json file
 
+### Tab 5: Ollama Metrics
+
+Displays Ollama service metrics and statistics:
+
+```
+  ────────────── ────────────── ────────────── ────────────
+REQUESTS         TOKENS           AVG T/A          CLIENTS      
+  ────────────── ────────────── ────────────── ────────────
+1.8k             877.3k           30.9             6
+
+LOADED MODELS (2)
+  ────────────────────────────── ────────────
+  qwen2.5-coder:14b              8.4GB
+  gemma4:latest                  8.9GB
+```
+
+**Features:**
+- Real-time request and token counts
+- Average tokens per request (T/A)
+- Connected client count
+- Loaded models with VRAM allocation
+- Updates every 500ms when Ollama is running
+- Shows "no data" when Ollama is offline
+
 ## Keyboard Controls
 
 | Shortcut | Action | Notes |
@@ -105,9 +129,10 @@ NAME                                        SCHEDULE             STATUS
 | `2` | Switch to Ollama tab | Shows loaded models |
 | `3` | Switch to OpenClaw tab | Shows service status |
 | `4` | Switch to Cron tab | Shows cron jobs |
+| `5` | Switch to Ollama Metrics tab | Shows Ollama stats |
 | `Tab` | Next tab | Cycles through tabs |
 | `Shift+Tab` | Previous tab | Cycles backwards |
-| `m` | Sort by memory | Default sort for Node.js tab |
+| `m` | Sort by memory | Default sort for Node.js/Ollama tabs |
 | `c` | Sort by CPU | Node.js tab only |
 | `s` | Sort by name | Node.js tab only |
 | `space` | Pause/resume | Toggles ▶ (running) / ⏸ (paused) |
