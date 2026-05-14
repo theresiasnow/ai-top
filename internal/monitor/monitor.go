@@ -10,7 +10,9 @@ import (
 type SystemMetrics struct {
 	OpenClaw      OpenClawStatus
 	Ollama        OllamaStatus
+	Omlx          OmlxStatus
 	OllamaProcess *ProcessInfo
+	OmlxProcess   *ProcessInfo
 	CronJobs      []CronJob
 	Processes     []ProcessInfo
 	UpdatedAt     time.Time
@@ -74,6 +76,7 @@ type Monitor struct {
 	metrics     *SystemMetrics
 	openClaw    *OpenClawDetector
 	Ollama      *OllamaClient
+	omlx        *OmlxClient
 	ollamaPort  string
 	refreshRate time.Duration
 }
@@ -86,6 +89,7 @@ func NewMonitor() *Monitor {
 		},
 		openClaw:    NewOpenClawDetector(3000),
 		Ollama:      NewOllamaClient(""),
+		omlx:        NewOmlxClient(),
 		ollamaPort:  "11434",
 		refreshRate: 2 * time.Second,
 	}
@@ -110,9 +114,18 @@ func (m *Monitor) GetMetrics() *SystemMetrics {
 		snapshot.Ollama.Models = make([]ModelInfo, len(m.metrics.Ollama.Models))
 		copy(snapshot.Ollama.Models, m.metrics.Ollama.Models)
 	}
+	if m.metrics.Omlx.Models != nil {
+		snapshot.Omlx.Models = make([]OmlxModelInfo, len(m.metrics.Omlx.Models))
+		copy(snapshot.Omlx.Models, m.metrics.Omlx.Models)
+	}
+
 	if m.metrics.OllamaProcess != nil {
 		ollamaProcess := *m.metrics.OllamaProcess
 		snapshot.OllamaProcess = &ollamaProcess
+	}
+	if m.metrics.OmlxProcess != nil {
+		omlxProcess := *m.metrics.OmlxProcess
+		snapshot.OmlxProcess = &omlxProcess
 	}
 
 	if m.metrics.OllamaLogs != nil {
@@ -137,6 +150,13 @@ func (m *Monitor) Refresh() error {
 	status, _ := m.openClaw.GetStatus()
 	m.metrics.OpenClaw = status
 
+	// omlx status
+	if omlxStatus, err := m.omlx.GetStatus(); err == nil {
+		m.metrics.Omlx = omlxStatus
+	} else {
+		m.metrics.Omlx = OmlxStatus{}
+	}
+
 	// Ollama status
 	running := m.Ollama.IsRunning()
 	models := []ModelInfo{}
@@ -155,10 +175,11 @@ func (m *Monitor) Refresh() error {
 	}
 	m.metrics.RunningModels = runningModels
 
-	// Processes — single enumeration for both list and ollama process
-	if procs, ollamaProc, err := m.GetAllProcesses(); err == nil {
+	// Processes — single enumeration for list, ollama process, and omlx process
+	if procs, ollamaProc, omlxProc, err := m.GetAllProcesses(); err == nil {
 		m.metrics.Processes = procs
 		m.metrics.OllamaProcess = ollamaProc
+		m.metrics.OmlxProcess = omlxProc
 	}
 
 	// Update timestamp

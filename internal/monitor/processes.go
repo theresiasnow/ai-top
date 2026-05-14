@@ -11,16 +11,16 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-// GetAllProcesses returns all monitored processes and the first ollama process,
-// enumerating system processes exactly once.
-func (m *Monitor) GetAllProcesses() (all []ProcessInfo, ollamaProc *ProcessInfo, err error) {
+// GetAllProcesses returns all monitored processes, the first ollama process,
+// and the first omlx process, enumerating system processes exactly once.
+func (m *Monitor) GetAllProcesses() (all []ProcessInfo, ollamaProc *ProcessInfo, omlxProc *ProcessInfo, err error) {
 	watched := map[string]bool{
-		"node": true, "nodejs": true, "ollama": true,
+		"node": true, "nodejs": true, "ollama": true, "omlx": true,
 	}
 
 	procs, err := process.Processes()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	for _, p := range procs {
@@ -41,8 +41,12 @@ func (m *Monitor) GetAllProcesses() (all []ProcessInfo, ollamaProc *ProcessInfo,
 			cp := info
 			ollamaProc = &cp
 		}
+		if omlxProc == nil && (name == "omlx" || base == "omlx") {
+			cp := info
+			omlxProc = &cp
+		}
 	}
-	return all, ollamaProc, nil
+	return all, ollamaProc, omlxProc, nil
 }
 
 // getProcessInfo extracts detailed info from a process

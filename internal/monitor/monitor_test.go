@@ -6,7 +6,7 @@ import (
 
 func TestGetNodeProcesses(t *testing.T) {
 	m := NewMonitor()
-	processes, _, err := m.GetAllProcesses()
+	processes, _, _, err := m.GetAllProcesses()
 
 	if err != nil {
 		t.Logf("GetAllProcesses error: %v", err)

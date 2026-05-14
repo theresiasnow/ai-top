@@ -39,7 +39,7 @@ type Model struct {
 	sortBy     string
 	paused     bool
 	errMsg     string
-	currentTab int // 1: Node.js, 2: Ollama Models, 3: OpenClaw, 4: Cron, 5: Ollama Metrics
+	currentTab int // 1: Node.js, 2: Ollama Models, 3: OpenClaw, 4: Cron, 5: Ollama Metrics, 6: omlx
 }
 
 func NewModel(mon *monitor.Monitor) Model {
@@ -82,13 +82,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "5":
 			m.currentTab = 5
 			m.errMsg = ""
+		case "6":
+			m.currentTab = 6
+			m.errMsg = ""
 		case "tab":
-			m.currentTab = m.currentTab%5 + 1
+			m.currentTab = m.currentTab%6 + 1
 			m.errMsg = ""
 		case "shift+tab":
 			m.currentTab = m.currentTab - 1
 			if m.currentTab < 1 {
-				m.currentTab = 5
+				m.currentTab = 6
 			}
 			m.errMsg = ""
 		case "up", "down":
@@ -169,6 +172,8 @@ func (m *Model) syncList() {
 		items = m.buildOpenClawItems(metrics)
 	case 4:
 		items = m.buildCronItems(metrics)
+	case 6:
+		items = m.buildOmlxModelItems(metrics)
 	default: // Tab 1: Node.js processes
 		items = m.buildNodeProcessItems(metrics)
 	}
@@ -218,6 +223,8 @@ func (m Model) View() string {
 		sb.WriteString(m.renderCronPanel(metrics, contentHeight))
 	case 5:
 		sb.WriteString(m.renderOllamaMetricsPanel(metrics, contentHeight))
+	case 6:
+		sb.WriteString(m.renderOmlxPanel(metrics, contentHeight))
 	default: // Tab 1: Node.js processes
 		sb.WriteString(m.renderProcessPanel(metrics, contentHeight))
 	}
@@ -328,20 +335,24 @@ func boxBottom(totalWidth int) string {
 // ── sections ─────────────────────────────────────────────────────────────────
 
 func (m Model) renderStatusBar(metrics *monitor.SystemMetrics) string {
-	w := max(41, m.width)
+	w := max(60, m.width)
 	gap := 1
-	leftW := (w - gap) / 2
-	rightW := w - gap - leftW
+	// Three equal boxes
+	boxW := (w - gap*2) / 3
+	// Give remainder to the middle box
+	midW := w - gap*2 - boxW*2
 
 	openClawLines := m.openClawStatusLines(metrics.OpenClaw)
 	ollamaLines := m.ollamaStatusLines(metrics.Ollama)
+	omlxLines := m.omlxStatusLines(metrics.Omlx)
 
-	leftBox := renderSmallBox(styleTitle.Render(" OpenClaw "), leftW, openClawLines)
-	rightBox := renderSmallBox(styleTitle.Render(" Ollama "), rightW, ollamaLines)
+	leftBox := renderSmallBox(styleTitle.Render(" OpenClaw "), boxW, openClawLines)
+	midBox := renderSmallBox(styleTitle.Render(" Ollama "), midW, ollamaLines)
+	rightBox := renderSmallBox(styleTitle.Render(" omlx "), boxW, omlxLines)
 
 	var lines []string
 	for i := range leftBox {
-		lines = append(lines, leftBox[i]+" "+rightBox[i])
+		lines = append(lines, leftBox[i]+" "+midBox[i]+" "+rightBox[i])
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1117,6 +1128,7 @@ func (m Model) renderFooter() string {
 		{3, "OpenClaw"},
 		{4, "Cron"},
 		{5, "Metrics"},
+		{6, "omlx"},
 	}
 	
 	var tabParts []string
@@ -1153,6 +1165,122 @@ func (m Model) renderFooter() string {
 	keybindBar := "  " + strings.Join(parts, sep)
 	
 	return tabBar + "\n" + keybindBar
+}
+
+func (m Model) omlxStatusLines(s monitor.OmlxStatus) []string {
+	if !s.Running {
+		return []string{
+			styleBad.Render("● offline"),
+			styleDim.Render("no omlx server detected"),
+		}
+	}
+	memLine := fmt.Sprintf("%s / %s",
+		monitor.FormatMemory(s.UsedMemory),
+		monitor.FormatMemory(s.MaxMemory),
+	)
+	return []string{
+		styleGood.Render("● online") + styleDim.Render(fmt.Sprintf("  %d models", len(s.Models))),
+		styleDim.Render(memLine),
+	}
+}
+
+func (m Model) renderOmlxPanel(metrics *monitor.SystemMetrics, contentHeight int) string {
+	w := max(40, m.width)
+	innerW := w - 4
+
+	items := m.list.items
+	list := m.list
+	if len(items) == 0 {
+		items = m.buildOmlxModelItems(metrics)
+		list.SetItems(items)
+	}
+
+	lines := list.Render(innerW, contentHeight)
+
+	above, below := list.ScrollInfo()
+	scrollHint := ""
+	if above > 0 {
+		scrollHint += styleWarn.Render(fmt.Sprintf(" ↑%d", above))
+	}
+	if below > 0 {
+		scrollHint += styleWarn.Render(fmt.Sprintf(" ↓%d", below))
+	}
+
+	status := "offline"
+	if metrics.Omlx.Running {
+		status = fmt.Sprintf("online · %d loaded", metrics.Omlx.LoadedCount)
+	}
+	indicator := styleDim.Render(" "+status+" ") + scrollHint
+
+	var sb strings.Builder
+	sb.WriteString(boxTop(styleTitle.Render(" omlx Models "), indicator, w))
+	sb.WriteString("\n")
+
+	// Process info at top if available
+	if metrics.OmlxProcess != nil {
+		procLine := fmt.Sprintf("process  pid %d  %s  %.1f%% cpu",
+			metrics.OmlxProcess.PID,
+			monitor.FormatMemory(metrics.OmlxProcess.Memory),
+			metrics.OmlxProcess.CPU,
+		)
+		sb.WriteString(boxLine(styleDim.Render(procLine), w))
+		sb.WriteString("\n")
+		sb.WriteString(boxDivider(w))
+		sb.WriteString("\n")
+		contentHeight -= 2
+	}
+
+	// Memory bar
+	if metrics.Omlx.Running && metrics.Omlx.MaxMemory > 0 {
+		memPct := float64(metrics.Omlx.UsedMemory) / float64(metrics.Omlx.MaxMemory) * 100
+		memLine := styleColHead.Render("VRAM ") +
+			miniBar(memPct, 12) + "  " +
+			styleDim.Render(fmt.Sprintf("%s / %s",
+				monitor.FormatMemory(metrics.Omlx.UsedMemory),
+				monitor.FormatMemory(metrics.Omlx.MaxMemory),
+			))
+		sb.WriteString(boxLine(memLine, w))
+		sb.WriteString("\n")
+		contentHeight--
+	}
+
+	for i, line := range lines {
+		if i >= contentHeight {
+			break
+		}
+		sb.WriteString(boxLine(line, w))
+		sb.WriteString("\n")
+	}
+	sb.WriteString(boxBottom(w))
+	return sb.String()
+}
+
+func (m Model) buildOmlxModelItems(metrics *monitor.SystemMetrics) []ListItem {
+	var items []ListItem
+
+	if !metrics.Omlx.Running {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "omlx offline"})
+		return items
+	}
+
+	if len(metrics.Omlx.Models) > 0 {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "models"})
+		for _, model := range metrics.Omlx.Models {
+			label := model.ID
+			extra := ""
+			if model.Loaded {
+				extra = styleGood.Render("loaded")
+			}
+			items = append(items, ListItem{
+				Kind:  KindSectionHead,
+				Label: fmt.Sprintf("%-40s %s", label, extra),
+			})
+		}
+	} else {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "no models found"})
+	}
+
+	return items
 }
 
 func isHotModel(modelName string) bool {
