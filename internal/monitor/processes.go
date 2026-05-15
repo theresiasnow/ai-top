@@ -15,7 +15,10 @@ import (
 // and the first omlx process, enumerating system processes exactly once.
 func (m *Monitor) GetAllProcesses() (all []ProcessInfo, ollamaProc *ProcessInfo, omlxProc *ProcessInfo, err error) {
 	watched := map[string]bool{
-		"node": true, "nodejs": true, "ollama": true, "omlx": true,
+		"node": true, "nodejs": true, "ollama": true,
+	}
+	if SupportsOmlx() {
+		watched["omlx"] = true
 	}
 
 	procs, err := process.Processes()
@@ -41,7 +44,7 @@ func (m *Monitor) GetAllProcesses() (all []ProcessInfo, ollamaProc *ProcessInfo,
 			cp := info
 			ollamaProc = &cp
 		}
-		if omlxProc == nil && (name == "omlx" || base == "omlx") {
+		if SupportsOmlx() && omlxProc == nil && (name == "omlx" || base == "omlx") {
 			cp := info
 			omlxProc = &cp
 		}

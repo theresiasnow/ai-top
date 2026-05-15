@@ -42,11 +42,20 @@ type Model struct {
 	currentTab int // 1: Node.js, 2: Ollama Models, 3: OpenClaw, 4: Cron, 5: Ollama Metrics, 6: omlx
 }
 
+const (
+	tabNodeProcesses = 1
+	tabOllamaModels  = 2
+	tabOpenClaw      = 3
+	tabCron          = 4
+	tabOllamaMetrics = 5
+	tabOmlx          = 6
+)
+
 func NewModel(mon *monitor.Monitor) Model {
 	return Model{
 		mon:        mon,
 		sortBy:     "memory",
-		currentTab: 1,
+		currentTab: tabNodeProcesses,
 	}
 }
 
@@ -56,11 +65,55 @@ func (m Model) Init() tea.Cmd {
 	})
 }
 
+func availableTabs() []int {
+	tabs := []int{tabNodeProcesses, tabOllamaModels, tabOpenClaw, tabCron, tabOllamaMetrics}
+	if monitor.SupportsOmlx() {
+		tabs = append(tabs, tabOmlx)
+	}
+	return tabs
+}
+
+func (m Model) isTabAvailable(tab int) bool {
+	for _, available := range availableTabs() {
+		if tab == available {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) ensureSupportedTab() {
+	if !m.isTabAvailable(m.currentTab) {
+		m.currentTab = tabNodeProcesses
+	}
+}
+
+func (m Model) nextTab() int {
+	tabs := availableTabs()
+	for i, tab := range tabs {
+		if tab == m.currentTab {
+			return tabs[(i+1)%len(tabs)]
+		}
+	}
+	return tabNodeProcesses
+}
+
+func (m Model) previousTab() int {
+	tabs := availableTabs()
+	for i, tab := range tabs {
+		if tab == m.currentTab {
+			return tabs[(i-1+len(tabs))%len(tabs)]
+		}
+	}
+	return tabNodeProcesses
+}
+
 type tickMsg time.Time
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		m.ensureSupportedTab()
 		m.syncList()
 		switch msg.String() {
 		case "q", "ctrl+c":
@@ -68,51 +121,50 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case " ":
 			m.paused = !m.paused
 		case "1":
-			m.currentTab = 1
+			m.currentTab = tabNodeProcesses
 			m.errMsg = ""
 		case "2":
-			m.currentTab = 2
+			m.currentTab = tabOllamaModels
 			m.errMsg = ""
 		case "3":
-			m.currentTab = 3
+			m.currentTab = tabOpenClaw
 			m.errMsg = ""
 		case "4":
-			m.currentTab = 4
+			m.currentTab = tabCron
 			m.errMsg = ""
 		case "5":
-			m.currentTab = 5
+			m.currentTab = tabOllamaMetrics
 			m.errMsg = ""
 		case "6":
-			m.currentTab = 6
-			m.errMsg = ""
+			if m.isTabAvailable(tabOmlx) {
+				m.currentTab = tabOmlx
+				m.errMsg = ""
+			}
 		case "tab":
-			m.currentTab = m.currentTab%6 + 1
+			m.currentTab = m.nextTab()
 			m.errMsg = ""
 		case "shift+tab":
-			m.currentTab = m.currentTab - 1
-			if m.currentTab < 1 {
-				m.currentTab = 6
-			}
+			m.currentTab = m.previousTab()
 			m.errMsg = ""
 		case "up", "down":
-			if m.currentTab == 1 || m.currentTab == 2 || m.currentTab == 4 {
+			if m.currentTab == tabNodeProcesses || m.currentTab == tabOllamaModels || m.currentTab == tabCron {
 				m.list.HandleKey(msg.String())
 			}
 		case "k", "r":
-			if m.currentTab == 1 || m.currentTab == 2 {
+			if m.currentTab == tabNodeProcesses || m.currentTab == tabOllamaModels {
 				action := m.list.HandleKey(msg.String())
 				m.dispatchAction(action)
 			}
 		case "s":
-			if m.currentTab == 1 {
+			if m.currentTab == tabNodeProcesses {
 				m.sortBy = "name"
 			}
 		case "c":
-			if m.currentTab == 1 {
+			if m.currentTab == tabNodeProcesses {
 				m.sortBy = "cpu"
 			}
 		case "m":
-			if m.currentTab == 1 {
+			if m.currentTab == tabNodeProcesses {
 				m.sortBy = "memory"
 			}
 		}
@@ -162,17 +214,18 @@ func (m *Model) syncList() {
 	if m.mon == nil {
 		return
 	}
+	m.ensureSupportedTab()
 	metrics := m.mon.GetMetrics()
-	
+
 	var items []ListItem
 	switch m.currentTab {
-	case 2:
+	case tabOllamaModels:
 		items = m.buildOllamaModelItems(metrics)
-	case 3:
+	case tabOpenClaw:
 		items = m.buildOpenClawItems(metrics)
-	case 4:
+	case tabCron:
 		items = m.buildCronItems(metrics)
-	case 6:
+	case tabOmlx:
 		items = m.buildOmlxModelItems(metrics)
 	default: // Tab 1: Node.js processes
 		items = m.buildNodeProcessItems(metrics)
@@ -189,13 +242,17 @@ func (m Model) View() string {
 	}
 
 	metrics := m.mon.GetMetrics()
+	currentTab := m.currentTab
+	if !m.isTabAvailable(currentTab) {
+		currentTab = tabNodeProcesses
+	}
 
 	// Layout constants (terminal lines):
 	//   status bar:    4   separator: 1
 	//   insights:      insightBoxRows+2   separator: 1  (optional)
 	//   process panel: contentHeight+2   separator: 1
 	//   footer:        2 (tab bar + keybindings)
-	const fixedOverhead = 4 + 1 + 2 + 1 + 2 // 10  (no insights, 2-line footer)
+	const fixedOverhead = 4 + 1 + 2 + 1 + 2        // 10  (no insights, 2-line footer)
 	const insightOverhead = insightBoxRows + 2 + 1 // 9
 	const minProcRows = 4
 
@@ -214,23 +271,23 @@ func (m Model) View() string {
 	sb.WriteString("\n")
 
 	// Dispatch to the correct tab renderer
-	switch m.currentTab {
-	case 2:
+	switch currentTab {
+	case tabOllamaModels:
 		sb.WriteString(m.renderOllamaModelsPanel(metrics, contentHeight))
-	case 3:
+	case tabOpenClaw:
 		sb.WriteString(m.renderOpenClawPanel(metrics, contentHeight))
-	case 4:
+	case tabCron:
 		sb.WriteString(m.renderCronPanel(metrics, contentHeight))
-	case 5:
+	case tabOllamaMetrics:
 		sb.WriteString(m.renderOllamaMetricsPanel(metrics, contentHeight))
-	case 6:
+	case tabOmlx:
 		sb.WriteString(m.renderOmlxPanel(metrics, contentHeight))
 	default: // Tab 1: Node.js processes
 		sb.WriteString(m.renderProcessPanel(metrics, contentHeight))
 	}
 
 	sb.WriteString("\n")
-	if showInsights && m.currentTab == 1 {
+	if showInsights && currentTab == tabNodeProcesses {
 		sb.WriteString(m.renderInsightsAndLogs(metrics))
 		sb.WriteString("\n")
 	}
@@ -337,22 +394,40 @@ func boxBottom(totalWidth int) string {
 func (m Model) renderStatusBar(metrics *monitor.SystemMetrics) string {
 	w := max(60, m.width)
 	gap := 1
-	// Three equal boxes
-	boxW := (w - gap*2) / 3
-	// Give remainder to the middle box
-	midW := w - gap*2 - boxW*2
+	boxes := []struct {
+		title string
+		lines []string
+	}{
+		{styleTitle.Render(" OpenClaw "), m.openClawStatusLines(metrics.OpenClaw)},
+		{styleTitle.Render(" Ollama "), m.ollamaStatusLines(metrics.Ollama)},
+	}
+	if monitor.SupportsOmlx() {
+		boxes = append(boxes, struct {
+			title string
+			lines []string
+		}{styleTitle.Render(" omlx "), m.omlxStatusLines(metrics.Omlx)})
+	}
 
-	openClawLines := m.openClawStatusLines(metrics.OpenClaw)
-	ollamaLines := m.ollamaStatusLines(metrics.Ollama)
-	omlxLines := m.omlxStatusLines(metrics.Omlx)
+	totalGap := gap * (len(boxes) - 1)
+	baseW := (w - totalGap) / len(boxes)
+	remainder := (w - totalGap) % len(boxes)
 
-	leftBox := renderSmallBox(styleTitle.Render(" OpenClaw "), boxW, openClawLines)
-	midBox := renderSmallBox(styleTitle.Render(" Ollama "), midW, ollamaLines)
-	rightBox := renderSmallBox(styleTitle.Render(" omlx "), boxW, omlxLines)
+	rendered := make([][]string, 0, len(boxes))
+	for i, box := range boxes {
+		boxW := baseW
+		if i < remainder {
+			boxW++
+		}
+		rendered = append(rendered, renderSmallBox(box.title, boxW, box.lines))
+	}
 
 	var lines []string
-	for i := range leftBox {
-		lines = append(lines, leftBox[i]+" "+midBox[i]+" "+rightBox[i])
+	for row := range rendered[0] {
+		var parts []string
+		for _, box := range rendered {
+			parts = append(parts, box[row])
+		}
+		lines = append(lines, strings.Join(parts, strings.Repeat(" ", gap)))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -595,7 +670,6 @@ func (m Model) ollamaLogLines(metrics *monitor.SystemMetrics) []string {
 	return lines
 }
 
-
 func (m Model) renderProcessPanel(metrics *monitor.SystemMetrics, contentHeight int) string {
 	w := max(40, m.width)
 	innerW := w - 4
@@ -757,7 +831,7 @@ func (m Model) renderOllamaMetricsPanel(metrics *monitor.SystemMetrics, contentH
 		requestsStr := "0"
 		tokensStr := "0"
 		clientsStr := fmt.Sprintf("%d", len(metrics.RunningModels))
-		
+
 		headerRow := fmt.Sprintf("  %-*s  %-*s  %-*s",
 			col1W, styleColHead.Render("REQUESTS"),
 			col2W, styleColHead.Render("TOKENS"),
@@ -880,7 +954,7 @@ func (m Model) buildNodeProcessItems(metrics *monitor.SystemMetrics) []ListItem 
 	var items []ListItem
 	processes := metrics.Processes
 	sortProcesses(processes, m.sortBy)
-	
+
 	if len(processes) > 0 {
 		for _, p := range processes {
 			items = append(items, processItem(p))
@@ -946,7 +1020,7 @@ func (m Model) buildOpenClawItems(metrics *monitor.SystemMetrics) []ListItem {
 	var items []ListItem
 	processes := openClawProcesses(metrics.Processes)
 	sortProcesses(processes, m.sortBy)
-	
+
 	if len(processes) > 0 {
 		for _, p := range processes {
 			items = append(items, processItem(p))
@@ -959,7 +1033,7 @@ func (m Model) buildOpenClawItems(metrics *monitor.SystemMetrics) []ListItem {
 
 func (m Model) buildCronItems(metrics *monitor.SystemMetrics) []ListItem {
 	var items []ListItem
-	
+
 	if len(metrics.CronJobs) > 0 {
 		for _, job := range metrics.CronJobs {
 			status := job.Status
@@ -1122,26 +1196,26 @@ func sortLabel(sortBy string) string {
 
 func (m Model) renderFooter() string {
 	// Tab bar at the beginning
-	tabs := []struct{ num int; label string }{
-		{1, "Node.js"},
-		{2, "Ollama"},
-		{3, "OpenClaw"},
-		{4, "Cron"},
-		{5, "Metrics"},
-		{6, "omlx"},
+	tabLabels := map[int]string{
+		tabNodeProcesses: "Node.js",
+		tabOllamaModels:  "Ollama",
+		tabOpenClaw:      "OpenClaw",
+		tabCron:          "Cron",
+		tabOllamaMetrics: "Metrics",
+		tabOmlx:          "omlx",
 	}
-	
+
 	var tabParts []string
-	for _, t := range tabs {
-		tabLabel := fmt.Sprintf("[%d] %s", t.num, t.label)
-		if m.currentTab == t.num {
+	for _, tab := range availableTabs() {
+		tabLabel := fmt.Sprintf("[%d] %s", tab, tabLabels[tab])
+		if m.currentTab == tab {
 			tabParts = append(tabParts, styleTitle.Render(tabLabel))
 		} else {
 			tabParts = append(tabParts, styleDim.Render(tabLabel))
 		}
 	}
 	tabBar := strings.Join(tabParts, styleDim.Render(" "))
-	
+
 	// Key bindings
 	type binding struct{ key, desc string }
 	bindings := []binding{
@@ -1163,7 +1237,7 @@ func (m Model) renderFooter() string {
 		parts = append(parts, styleBad.Render(truncate(m.errMsg, 36)))
 	}
 	keybindBar := "  " + strings.Join(parts, sep)
-	
+
 	return tabBar + "\n" + keybindBar
 }
 

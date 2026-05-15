@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -13,16 +14,16 @@ const defaultOmlxPort = 8000
 
 // OmlxStatus holds current omlx server state.
 type OmlxStatus struct {
-	Running      bool
-	Models       []OmlxModelInfo
-	LoadedCount  int
-	MaxMemory    uint64 // bytes
-	UsedMemory   uint64 // bytes
+	Running     bool
+	Models      []OmlxModelInfo
+	LoadedCount int
+	MaxMemory   uint64 // bytes
+	UsedMemory  uint64 // bytes
 }
 
 // OmlxModelInfo represents a model known to omlx.
 type OmlxModelInfo struct {
-	ID   string
+	ID     string
 	Loaded bool
 }
 
@@ -31,6 +32,11 @@ type OmlxClient struct {
 	baseURL string
 	apiKey  string
 	client  *http.Client
+}
+
+// SupportsOmlx reports whether omlx should be probed on this platform.
+func SupportsOmlx() bool {
+	return runtime.GOOS == "darwin"
 }
 
 type omlxSettings struct {

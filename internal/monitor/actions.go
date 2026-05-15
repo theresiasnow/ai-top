@@ -5,17 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"syscall"
 )
 
-// KillProcess sends SIGTERM to a process.
+// KillProcess asks the platform to terminate a process.
 func KillProcess(pid int) error {
-	return syscall.Kill(pid, syscall.SIGTERM)
+	return terminateProcess(pid)
 }
 
-// RestartProcess sends SIGHUP to a process.
+// RestartProcess asks the platform to restart or reload a process.
 func RestartProcess(pid int) error {
-	return syscall.Kill(pid, syscall.SIGHUP)
+	return restartProcess(pid)
 }
 
 // UnloadOllamaModel asks Ollama to unload a model by setting keep_alive to 0.

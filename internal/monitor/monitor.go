@@ -89,10 +89,17 @@ func NewMonitor() *Monitor {
 		},
 		openClaw:    NewOpenClawDetector(3000),
 		Ollama:      NewOllamaClient(""),
-		omlx:        NewOmlxClient(),
+		omlx:        newOmlxClientForPlatform(),
 		ollamaPort:  "11434",
 		refreshRate: 2 * time.Second,
 	}
+}
+
+func newOmlxClientForPlatform() *OmlxClient {
+	if !SupportsOmlx() {
+		return nil
+	}
+	return NewOmlxClient()
 }
 
 // GetMetrics returns current metrics (snapshot)
@@ -151,10 +158,15 @@ func (m *Monitor) Refresh() error {
 	m.metrics.OpenClaw = status
 
 	// omlx status
-	if omlxStatus, err := m.omlx.GetStatus(); err == nil {
-		m.metrics.Omlx = omlxStatus
+	if m.omlx != nil {
+		if omlxStatus, err := m.omlx.GetStatus(); err == nil {
+			m.metrics.Omlx = omlxStatus
+		} else {
+			m.metrics.Omlx = OmlxStatus{}
+		}
 	} else {
 		m.metrics.Omlx = OmlxStatus{}
+		m.metrics.OmlxProcess = nil
 	}
 
 	// Ollama status
