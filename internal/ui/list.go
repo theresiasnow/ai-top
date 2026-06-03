@@ -17,6 +17,7 @@ const (
 
 type ListItem struct {
 	Kind      ItemKind
+	Provider  string
 	Label     string
 	PID       int
 	ModelName string
@@ -64,6 +65,9 @@ func (l *SelectableList) HandleKey(key string) Action {
 	case "k":
 		item := l.SelectedItem()
 		if item.Kind == KindOllamaModel {
+			if item.Provider == "omlx" {
+				return ActionNone
+			}
 			return ActionUnload
 		}
 		if item.Kind == KindProcess {
@@ -72,6 +76,9 @@ func (l *SelectableList) HandleKey(key string) Action {
 	case "r":
 		item := l.SelectedItem()
 		if item.Kind == KindOllamaModel {
+			if item.Provider == "omlx" {
+				return ActionNone
+			}
 			return ActionUnload
 		}
 		if item.Kind == KindProcess {
@@ -169,8 +176,9 @@ func (l *SelectableList) renderItem(index int, item ListItem, innerWidth int) st
 		cpuStr := lipgloss.NewStyle().Width(cpuW).Render(modelHeat(item.ModelName))
 		var memStr string
 		if item.Loaded {
+			cpuStr = lipgloss.NewStyle().Width(cpuW).Render(greenCPUBar(item.CPU))
 			memStr = lipgloss.NewStyle().Width(memW).Render(
-				styleGood.Render("▶ ") + memBar(item.Memory, item.MemoryPct))
+				styleGood.Render("▶ ") + greenMemBar(item.Memory, item.MemoryPct))
 		} else {
 			sizeInfo := item.Extra
 			if sizeInfo == "" {
@@ -190,7 +198,11 @@ func (l *SelectableList) actionBar(innerWidth int) string {
 	var text string
 	switch item.Kind {
 	case KindOllamaModel:
-		text = fmt.Sprintf("  k/r: unload  %s", item.ModelName)
+		if item.Provider == "omlx" {
+			text = fmt.Sprintf("  omlx model  %s", item.ModelName)
+		} else {
+			text = fmt.Sprintf("  k/r: unload  %s", item.ModelName)
+		}
 	case KindProcess:
 		text = fmt.Sprintf("  k: kill  PID %d · %s    r: SIGHUP", item.PID, item.Label)
 	default:

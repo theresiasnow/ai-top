@@ -39,7 +39,7 @@ type Model struct {
 	sortBy     string
 	paused     bool
 	errMsg     string
-	currentTab int // 1: Node.js, 2: Ollama Models, 3: OpenClaw, 4: Cron, 5: Ollama Metrics, 6: omlx
+	currentTab int // 1: Top Processes, 2: Ollama Models, 3: OpenClaw, 4: Cron, 5: Ollama Metrics, 6: omlx
 }
 
 const (
@@ -227,7 +227,7 @@ func (m *Model) syncList() {
 		items = m.buildCronItems(metrics)
 	case tabOmlx:
 		items = m.buildOmlxModelItems(metrics)
-	default: // Tab 1: Node.js processes
+	default: // tabNodeProcesses
 		items = m.buildNodeProcessItems(metrics)
 	}
 	m.list.SetItems(items)
@@ -270,7 +270,6 @@ func (m Model) View() string {
 	sb.WriteString(m.renderStatusBar(metrics))
 	sb.WriteString("\n")
 
-	// Dispatch to the correct tab renderer
 	switch currentTab {
 	case tabOllamaModels:
 		sb.WriteString(m.renderOllamaModelsPanel(metrics, contentHeight))
@@ -282,7 +281,7 @@ func (m Model) View() string {
 		sb.WriteString(m.renderOllamaMetricsPanel(metrics, contentHeight))
 	case tabOmlx:
 		sb.WriteString(m.renderOmlxPanel(metrics, contentHeight))
-	default: // Tab 1: Node.js processes
+	default: // tabNodeProcesses
 		sb.WriteString(m.renderProcessPanel(metrics, contentHeight))
 	}
 
@@ -346,6 +345,26 @@ func memBar(bytes uint64, pct float32) string {
 		lipgloss.NewStyle().Foreground(c).Render(fmt.Sprintf("%-8s", monitor.FormatMemory(bytes)))
 }
 
+func greenMiniBar(pct float64, width int) string {
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	filled := int(math.Round(float64(width) * pct / 100.0))
+	empty := width - filled
+	return styleGood.Render(strings.Repeat("█", filled)) + styleDim.Render(strings.Repeat("░", empty))
+}
+
+func greenCPUBar(pct float64) string {
+	return greenMiniBar(pct, 8) + " " + styleGood.Render(fmt.Sprintf("%5.1f%%", pct))
+}
+
+func greenMemBar(bytes uint64, pct float32) string {
+	return greenMiniBar(float64(pct), 8) + " " + styleGood.Render(fmt.Sprintf("%-8s", monitor.FormatMemory(bytes)))
+}
+
 // ── box drawing ──────────────────────────────────────────────────────────────
 
 func ds(s string) string { return styleDim.Render(s) }
@@ -398,8 +417,9 @@ func (m Model) renderStatusBar(metrics *monitor.SystemMetrics) string {
 		title string
 		lines []string
 	}{
+		{styleTitle.Render(" System "), m.systemStatusLines(metrics.SysInfo)},
 		{styleTitle.Render(" OpenClaw "), m.openClawStatusLines(metrics.OpenClaw)},
-		{styleTitle.Render(" Ollama "), m.ollamaStatusLines(metrics.Ollama)},
+		{styleTitle.Render(" Ollama "), m.ollamaStatusLines(metrics.Ollama, metrics.RunningModels)},
 	}
 	if monitor.SupportsOmlx() {
 		boxes = append(boxes, struct {
@@ -432,6 +452,14 @@ func (m Model) renderStatusBar(metrics *monitor.SystemMetrics) string {
 	return strings.Join(lines, "\n")
 }
 
+func (m Model) systemStatusLines(si monitor.SystemInfo) []string {
+	memInfo := fmt.Sprintf("%s / %s", monitor.FormatMemory(si.MemUsed), monitor.FormatMemory(si.MemTotal))
+	return []string{
+		styleColHead.Render("CPU ") + cpuBar(si.CPUUsage),
+		styleColHead.Render("MEM ") + miniBar(float64(si.MemPercent), 8) + " " + styleDim.Render(memInfo),
+	}
+}
+
 func (m Model) openClawStatusLines(s monitor.OpenClawStatus) []string {
 	if !s.Running {
 		return []string{
@@ -446,7 +474,7 @@ func (m Model) openClawStatusLines(s monitor.OpenClawStatus) []string {
 	}
 }
 
-func (m Model) ollamaStatusLines(s monitor.OllamaStatus) []string {
+func (m Model) ollamaStatusLines(s monitor.OllamaStatus, running []monitor.RunningModel) []string {
 	if !s.Running {
 		return []string{
 			styleBad.Render("● offline"),
@@ -455,19 +483,19 @@ func (m Model) ollamaStatusLines(s monitor.OllamaStatus) []string {
 	}
 
 	var names []string
-	for i, model := range s.Models {
+	for i, rm := range running {
 		if i >= 3 {
 			break
 		}
-		names = append(names, model.Name+" "+modelHeat(model.Name))
+		names = append(names, truncate(rm.Name, 20)+" "+modelHeat(rm.Name))
 	}
-	modelLine := styleDim.Render("no loaded models")
+	loadedLine := styleDim.Render("no models loaded")
 	if len(names) > 0 {
-		modelLine = strings.Join(names, styleDim.Render("  "))
+		loadedLine = strings.Join(names, styleDim.Render("  "))
 	}
 	return []string{
-		styleGood.Render("● online") + styleDim.Render(fmt.Sprintf("  %d models", len(s.Models))),
-		modelLine,
+		styleGood.Render("● online") + styleDim.Render(fmt.Sprintf("  %d installed · %d loaded", len(s.Models), len(running))),
+		loadedLine,
 	}
 }
 
@@ -499,177 +527,6 @@ func formatUptime(d time.Duration) string {
 	return fmt.Sprintf("%dm", mn)
 }
 
-func (m Model) renderInsightsAndLogs(metrics *monitor.SystemMetrics) string {
-	w := max(41, m.width)
-	gap := 1
-	leftW := (w - gap) / 2
-	rightW := w - gap - leftW
-
-	memLines := m.generateMemoryLines(metrics)
-	logLines := m.ollamaLogLines(metrics)
-
-	leftBox := m.renderTextBox(styleTitle.Render(" Memory "), leftW, memLines)
-	rightBox := m.renderTextBox(styleTitle.Render(" Ollama Logs "), rightW, logLines)
-
-	var lines []string
-	for i := range leftBox {
-		lines = append(lines, leftBox[i]+" "+rightBox[i])
-	}
-	return strings.Join(lines, "\n")
-}
-
-const insightBoxRows = 6 // content rows inside the box
-
-func (m Model) renderTextBox(title string, width int, lines []string) []string {
-	if width < 20 {
-		width = 20
-	}
-	out := []string{boxTop(title, "", width)}
-	for i := 0; i < insightBoxRows; i++ {
-		content := ""
-		if i < len(lines) {
-			content = lines[i]
-		}
-		out = append(out, boxLine(content, width))
-	}
-	out = append(out, boxBottom(width))
-	return out
-}
-
-// generateMemoryLines produces memory analysis content for the Memory panel.
-// It mirrors ollamon's memory view: RAM/Swap bars, VRAM per loaded model, status.
-func (m Model) generateMemoryLines(metrics *monitor.SystemMetrics) []string {
-	var lines []string
-	si := metrics.SysInfo
-
-	// RAM bar
-	ramPct := float64(si.MemPercent)
-	ramColor := colorGreen
-	switch {
-	case ramPct >= 85:
-		ramColor = colorRed
-	case ramPct >= 70:
-		ramColor = colorAmber
-	}
-	ramLine := styleColHead.Render("RAM  ") +
-		miniBar(ramPct, 10) + "  " +
-		lipgloss.NewStyle().Foreground(ramColor).Render(fmt.Sprintf("%4.0f%%", ramPct)) +
-		styleDim.Render("  "+monitor.FormatMemory(si.MemUsed)+"/"+monitor.FormatMemory(si.MemTotal))
-	lines = append(lines, ramLine)
-
-	// Swap bar (only shown when swap is configured)
-	if si.SwapTotal > 0 {
-		swapPct := float64(si.SwapUsed) / float64(si.SwapTotal) * 100
-		swapLine := styleColHead.Render("Swap ") +
-			miniBar(swapPct, 10) + "  " +
-			styleDim.Render(fmt.Sprintf("%4.0f%%  %s/%s",
-				swapPct, monitor.FormatMemory(si.SwapUsed), monitor.FormatMemory(si.SwapTotal)))
-		lines = append(lines, swapLine)
-	}
-
-	// VRAM section header
-	lines = append(lines, styleDim.Render("  VRAM (Unified Memory)"))
-
-	// Per-model VRAM breakdown from /api/ps
-	if len(metrics.RunningModels) == 0 {
-		lines = append(lines, styleDim.Render("  no models in VRAM"))
-	} else {
-		for _, rm := range metrics.RunningModels {
-			vramPct := 0.0
-			if si.MemTotal > 0 {
-				vramPct = float64(rm.SizeVRAM) / float64(si.MemTotal) * 100
-			}
-			vramColor := colorGreen
-			switch {
-			case vramPct >= 80:
-				vramColor = colorRed
-			case vramPct >= 50:
-				vramColor = colorAmber
-			}
-			name := truncate(rm.Name, 18)
-			extra := ""
-			if rm.SizeRAM > 0 {
-				extra = styleDim.Render(" +" + monitor.FormatMemory(rm.SizeRAM) + " ram")
-			}
-			line := styleText.Render(fmt.Sprintf("  %-18s ", name)) +
-				miniBar(vramPct, 8) + " " +
-				lipgloss.NewStyle().Foreground(vramColor).Render(fmt.Sprintf("%-9s", monitor.FormatMemory(rm.SizeVRAM))) +
-				extra
-			lines = append(lines, line)
-		}
-	}
-
-	// Status insight at the bottom
-	switch {
-	case ramPct >= 85:
-		lines = append(lines, styleWarn.Render("• RAM critical – unload models or restart Ollama"))
-	case ramPct >= 70:
-		lines = append(lines, styleText.Render("• RAM high – keep-alive settings may need review"))
-	case metrics.DiskUsagePct >= 90:
-		lines = append(lines, styleBad.Render("• Disk critical – free space immediately"))
-	case metrics.DiskUsagePct >= 80:
-		lines = append(lines, styleWarn.Render("• Disk high – old models may need cleanup"))
-	default:
-		lines = append(lines, styleGood.Render("• RAM usage is comfortable"))
-	}
-
-	return lines
-}
-
-func (m Model) generateInsights(metrics *monitor.SystemMetrics) []string {
-	var lines []string
-
-	ramPct := float64(metrics.SysInfo.MemPercent)
-	switch {
-	case ramPct >= 85:
-		lines = append(lines, styleWarn.Render("• RAM critically high. Unload models or restart Ollama."))
-	case ramPct >= 70:
-		lines = append(lines, styleText.Render("• RAM usage is moderately high. Keep-alive")+
-			styleText.Render(" settings may need review."))
-	}
-
-	switch {
-	case metrics.DiskUsagePct >= 90:
-		lines = append(lines, styleBad.Render("• Disk usage critical. Free space immediately."))
-	case metrics.DiskUsagePct >= 80:
-		lines = append(lines, styleWarn.Render("• Disk usage is approaching a critical")+
-			styleWarn.Render(" threshold. Old models may need cleanup."))
-	}
-
-	var largestName string
-	var largestBytes int64
-	for _, model := range metrics.Ollama.Models {
-		if model.SizeBytes > largestBytes {
-			largestBytes = model.SizeBytes
-			largestName = model.Name
-		}
-	}
-	if largestName != "" {
-		lines = append(lines, styleText.Render(fmt.Sprintf("• Largest installed model: %s (%s)",
-			largestName, monitor.FormatMemory(uint64(largestBytes)))))
-	}
-
-	if !metrics.Ollama.Running {
-		lines = append(lines, styleDim.Render("• Ollama is not running."))
-	} else if len(metrics.Ollama.Models) == 0 {
-		lines = append(lines, styleDim.Render("• No active in-memory model is visible right now."))
-	}
-
-	if len(lines) == 0 {
-		lines = append(lines, styleGood.Render("• System looks healthy."))
-	}
-	return lines
-}
-
-func (m Model) ollamaLogLines(metrics *monitor.SystemMetrics) []string {
-	path := monitor.OllamaLogPath()
-	lines := []string{styleDim.Render(path)}
-	for _, l := range metrics.OllamaLogs {
-		lines = append(lines, styleText.Render(l))
-	}
-	return lines
-}
-
 func (m Model) renderProcessPanel(metrics *monitor.SystemMetrics, contentHeight int) string {
 	w := max(40, m.width)
 	innerW := w - 4
@@ -677,7 +534,7 @@ func (m Model) renderProcessPanel(metrics *monitor.SystemMetrics, contentHeight 
 	items := m.list.items
 	list := m.list
 	if len(items) == 0 {
-		items = m.buildListItems(metrics)
+		items = m.buildNodeProcessItems(metrics)
 		list.SetItems(items)
 	}
 
@@ -709,6 +566,161 @@ func (m Model) renderProcessPanel(metrics *monitor.SystemMetrics, contentHeight 
 	return sb.String()
 }
 
+func (m Model) renderInsightsAndLogs(metrics *monitor.SystemMetrics) string {
+	w := max(41, m.width)
+	gap := 1
+	leftW := (w - gap) / 2
+	rightW := w - gap - leftW
+
+	memLines := m.generateMemoryLines(metrics)
+	logLines := m.ollamaLogLines(metrics)
+
+	leftBox := m.renderTextBox(styleTitle.Render(" Memory "), leftW, memLines)
+	rightBox := m.renderTextBox(styleTitle.Render(" Ollama Logs "), rightW, logLines)
+
+	var lines []string
+	for i := range leftBox {
+		lines = append(lines, leftBox[i]+" "+rightBox[i])
+	}
+	return strings.Join(lines, "\n")
+}
+
+const insightBoxRows = 6
+
+func (m Model) renderTextBox(title string, width int, lines []string) []string {
+	if width < 20 {
+		width = 20
+	}
+	out := []string{boxTop(title, "", width)}
+	for i := 0; i < insightBoxRows; i++ {
+		content := ""
+		if i < len(lines) {
+			content = lines[i]
+		}
+		out = append(out, boxLine(content, width))
+	}
+	out = append(out, boxBottom(width))
+	return out
+}
+
+func (m Model) generateMemoryLines(metrics *monitor.SystemMetrics) []string {
+	var lines []string
+	si := metrics.SysInfo
+
+	ramPct := float64(si.MemPercent)
+	ramColor := colorGreen
+	switch {
+	case ramPct >= 85:
+		ramColor = colorRed
+	case ramPct >= 70:
+		ramColor = colorAmber
+	}
+	ramLine := styleColHead.Render("RAM  ") +
+		miniBar(ramPct, 10) + "  " +
+		lipgloss.NewStyle().Foreground(ramColor).Render(fmt.Sprintf("%4.0f%%", ramPct)) +
+		styleDim.Render("  "+monitor.FormatMemory(si.MemUsed)+"/"+monitor.FormatMemory(si.MemTotal))
+	lines = append(lines, ramLine)
+
+	if si.SwapTotal > 0 {
+		swapPct := float64(si.SwapUsed) / float64(si.SwapTotal) * 100
+		swapLine := styleColHead.Render("Swap ") +
+			miniBar(swapPct, 10) + "  " +
+			styleDim.Render(fmt.Sprintf("%4.0f%%  %s/%s",
+				swapPct, monitor.FormatMemory(si.SwapUsed), monitor.FormatMemory(si.SwapTotal)))
+		lines = append(lines, swapLine)
+	}
+
+	lines = append(lines, styleDim.Render("  VRAM (Unified Memory)"))
+
+	if len(metrics.RunningModels) == 0 {
+		lines = append(lines, styleDim.Render("  no models in VRAM"))
+	} else {
+		for _, rm := range metrics.RunningModels {
+			vramPct := 0.0
+			if si.MemTotal > 0 {
+				vramPct = float64(rm.SizeVRAM) / float64(si.MemTotal) * 100
+			}
+			vramColor := colorGreen
+			switch {
+			case vramPct >= 80:
+				vramColor = colorRed
+			case vramPct >= 50:
+				vramColor = colorAmber
+			}
+			name := truncate(rm.Name, 18)
+			extra := ""
+			if rm.SizeRAM > 0 {
+				extra = styleDim.Render(" +" + monitor.FormatMemory(rm.SizeRAM) + " ram")
+			}
+			line := styleText.Render(fmt.Sprintf("  %-18s ", name)) +
+				miniBar(vramPct, 8) + " " +
+				lipgloss.NewStyle().Foreground(vramColor).Render(fmt.Sprintf("%-9s", monitor.FormatMemory(rm.SizeVRAM))) +
+				extra
+			lines = append(lines, line)
+		}
+	}
+
+	switch {
+	case ramPct >= 85:
+		lines = append(lines, styleWarn.Render("• RAM critical – unload models or restart Ollama"))
+	case ramPct >= 70:
+		lines = append(lines, styleText.Render("• RAM high – keep-alive settings may need review"))
+	case metrics.DiskUsagePct >= 90:
+		lines = append(lines, styleBad.Render("• Disk critical – free space immediately"))
+	case metrics.DiskUsagePct >= 80:
+		lines = append(lines, styleWarn.Render("• Disk high – old models may need cleanup"))
+	default:
+		lines = append(lines, styleGood.Render("• RAM usage is comfortable"))
+	}
+
+	return lines
+}
+
+func (m Model) ollamaLogLines(metrics *monitor.SystemMetrics) []string {
+	path := monitor.OllamaLogPath()
+	lines := []string{styleDim.Render(path)}
+	for _, l := range metrics.OllamaLogs {
+		lines = append(lines, styleText.Render(l))
+	}
+	return lines
+}
+
+func (m Model) buildNodeProcessItems(metrics *monitor.SystemMetrics) []ListItem {
+	var items []ListItem
+	processes := metrics.Processes
+	sortProcesses(processes, m.sortBy)
+
+	if len(processes) > 0 {
+		for _, p := range processes {
+			items = append(items, processItem(p))
+		}
+	} else {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "no processes found"})
+	}
+	return items
+}
+
+func selectableCount(items []ListItem) int {
+	count := 0
+	for _, item := range items {
+		if item.selectable() {
+			count++
+		}
+	}
+	return count
+}
+
+func sortLabel(sortBy string) string {
+	switch sortBy {
+	case "cpu":
+		return "cpu"
+	case "name":
+		return "name"
+	default:
+		return "mem"
+	}
+}
+
 func (m Model) renderOllamaModelsPanel(metrics *monitor.SystemMetrics, contentHeight int) string {
 	w := max(40, m.width)
 	innerW := w - 4
@@ -731,11 +743,12 @@ func (m Model) renderOllamaModelsPanel(metrics *monitor.SystemMetrics, contentHe
 		scrollHint += styleWarn.Render(fmt.Sprintf(" ↓%d", below))
 	}
 
-	modelCount := len(metrics.RunningModels)
-	indicator := styleDim.Render(fmt.Sprintf(" %d loaded ", modelCount)) + scrollHint
+	modelCount := len(metrics.Ollama.Models) + len(metrics.Omlx.Models)
+	runningCount := len(metrics.RunningModels) + metrics.Omlx.LoadedCount
+	indicator := styleDim.Render(fmt.Sprintf(" %d models · %d running ", modelCount, runningCount)) + scrollHint
 
 	var sb strings.Builder
-	sb.WriteString(boxTop(styleTitle.Render(" Ollama Models "), indicator, w))
+	sb.WriteString(boxTop(styleTitle.Render(" Local Models "), indicator, w))
 	sb.WriteString("\n")
 	for i, line := range lines {
 		if i >= contentHeight {
@@ -950,23 +963,13 @@ func (m Model) renderOllamaMetricsPanel(metrics *monitor.SystemMetrics, contentH
 	return sb.String()
 }
 
-func (m Model) buildNodeProcessItems(metrics *monitor.SystemMetrics) []ListItem {
-	var items []ListItem
-	processes := metrics.Processes
-	sortProcesses(processes, m.sortBy)
-
-	if len(processes) > 0 {
-		for _, p := range processes {
-			items = append(items, processItem(p))
-		}
-	} else {
-		items = append(items, ListItem{Kind: KindSectionHead, Label: "no processes found"})
-	}
-	return items
-}
 
 func (m Model) buildOllamaModelItems(metrics *monitor.SystemMetrics) []ListItem {
 	var items []ListItem
+	ollamaCPU := 0.0
+	if metrics.OllamaProcess != nil {
+		ollamaCPU = metrics.OllamaProcess.CPU
+	}
 
 	loadedMap := make(map[string]monitor.RunningModel)
 	for _, rm := range metrics.RunningModels {
@@ -974,7 +977,7 @@ func (m Model) buildOllamaModelItems(metrics *monitor.SystemMetrics) []ListItem 
 	}
 
 	if len(metrics.RunningModels) > 0 {
-		items = append(items, ListItem{Kind: KindSectionHead, Label: "loaded in VRAM"})
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "ollama running"})
 		for _, rm := range metrics.RunningModels {
 			vramPct := float32(0)
 			if metrics.SysInfo.MemTotal > 0 {
@@ -982,8 +985,10 @@ func (m Model) buildOllamaModelItems(metrics *monitor.SystemMetrics) []ListItem 
 			}
 			items = append(items, ListItem{
 				Kind:      KindOllamaModel,
+				Provider:  "ollama",
 				Label:     rm.Name,
 				ModelName: rm.Name,
+				CPU:       ollamaCPU,
 				Memory:    rm.SizeVRAM,
 				MemoryPct: vramPct,
 				Loaded:    true,
@@ -998,16 +1003,21 @@ func (m Model) buildOllamaModelItems(metrics *monitor.SystemMetrics) []ListItem 
 		}
 	}
 	if len(diskModels) > 0 {
-		items = append(items, ListItem{Kind: KindSectionHead, Label: "on disk"})
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "ollama on disk"})
 		for _, model := range diskModels {
 			items = append(items, ListItem{
 				Kind:      KindOllamaModel,
+				Provider:  "ollama",
 				Label:     model.Name,
 				ModelName: model.Name,
 				Extra:     model.Size,
 				Loaded:    false,
 			})
 		}
+	}
+
+	if monitor.SupportsOmlx() {
+		items = append(items, m.buildOmlxModelItems(metrics)...)
 	}
 
 	if len(items) == 0 {
@@ -1051,75 +1061,6 @@ func (m Model) buildCronItems(metrics *monitor.SystemMetrics) []ListItem {
 	return items
 }
 
-func (m Model) buildListItems(metrics *monitor.SystemMetrics) []ListItem {
-	var items []ListItem
-
-	// Build a set of currently loaded model names from /api/ps
-	loadedMap := make(map[string]monitor.RunningModel)
-	for _, rm := range metrics.RunningModels {
-		loadedMap[rm.Name] = rm
-	}
-
-	// Loaded in VRAM — from RunningModels (actual memory residents)
-	if len(metrics.RunningModels) > 0 {
-		items = append(items, ListItem{Kind: KindSectionHead, Label: "loaded in VRAM"})
-		for _, rm := range metrics.RunningModels {
-			vramPct := float32(0)
-			if metrics.SysInfo.MemTotal > 0 {
-				vramPct = float32(float64(rm.SizeVRAM) / float64(metrics.SysInfo.MemTotal) * 100)
-			}
-			items = append(items, ListItem{
-				Kind:      KindOllamaModel,
-				Label:     rm.Name,
-				ModelName: rm.Name,
-				Memory:    rm.SizeVRAM,
-				MemoryPct: vramPct,
-				Loaded:    true,
-			})
-		}
-	}
-
-	// On disk — installed models not currently in VRAM
-	var diskModels []monitor.ModelInfo
-	for _, model := range metrics.Ollama.Models {
-		if _, isLoaded := loadedMap[model.Name]; !isLoaded {
-			diskModels = append(diskModels, model)
-		}
-	}
-	if len(diskModels) > 0 {
-		items = append(items, ListItem{Kind: KindSectionHead, Label: "on disk"})
-		for _, model := range diskModels {
-			items = append(items, ListItem{
-				Kind:      KindOllamaModel,
-				Label:     model.Name,
-				ModelName: model.Name,
-				Extra:     model.Size,
-				Loaded:    false,
-			})
-		}
-	}
-
-	if metrics.OllamaProcess != nil {
-		items = append(items,
-			ListItem{Kind: KindSectionHead, Label: "ollama process"},
-			processItem(*metrics.OllamaProcess),
-		)
-	}
-
-	processes := openClawProcesses(metrics.Processes)
-	sortProcesses(processes, m.sortBy)
-	if len(processes) > 0 {
-		items = append(items, ListItem{Kind: KindSectionHead, Label: "OpenClaw processes"})
-		for _, p := range processes {
-			items = append(items, processItem(p))
-		}
-	}
-
-	if len(items) == 0 {
-		items = append(items, ListItem{Kind: KindSectionHead, Label: "no monitored processes found"})
-	}
-	return items
-}
 
 func processItem(p monitor.ProcessInfo) ListItem {
 	return ListItem{
@@ -1173,31 +1114,11 @@ func sortByName(processes []monitor.ProcessInfo) {
 	})
 }
 
-func selectableCount(items []ListItem) int {
-	count := 0
-	for _, item := range items {
-		if item.selectable() {
-			count++
-		}
-	}
-	return count
-}
-
-func sortLabel(sortBy string) string {
-	switch sortBy {
-	case "cpu":
-		return "cpu"
-	case "name":
-		return "name"
-	default:
-		return "mem"
-	}
-}
 
 func (m Model) renderFooter() string {
 	// Tab bar at the beginning
 	tabLabels := map[int]string{
-		tabNodeProcesses: "Node.js",
+		tabNodeProcesses: "Top",
 		tabOllamaModels:  "Ollama",
 		tabOpenClaw:      "OpenClaw",
 		tabCron:          "Cron",
@@ -1304,20 +1225,6 @@ func (m Model) renderOmlxPanel(metrics *monitor.SystemMetrics, contentHeight int
 		contentHeight -= 2
 	}
 
-	// Memory bar
-	if metrics.Omlx.Running && metrics.Omlx.MaxMemory > 0 {
-		memPct := float64(metrics.Omlx.UsedMemory) / float64(metrics.Omlx.MaxMemory) * 100
-		memLine := styleColHead.Render("VRAM ") +
-			miniBar(memPct, 12) + "  " +
-			styleDim.Render(fmt.Sprintf("%s / %s",
-				monitor.FormatMemory(metrics.Omlx.UsedMemory),
-				monitor.FormatMemory(metrics.Omlx.MaxMemory),
-			))
-		sb.WriteString(boxLine(memLine, w))
-		sb.WriteString("\n")
-		contentHeight--
-	}
-
 	for i, line := range lines {
 		if i >= contentHeight {
 			break
@@ -1332,26 +1239,80 @@ func (m Model) renderOmlxPanel(metrics *monitor.SystemMetrics, contentHeight int
 func (m Model) buildOmlxModelItems(metrics *monitor.SystemMetrics) []ListItem {
 	var items []ListItem
 
-	if !metrics.Omlx.Running {
-		items = append(items, ListItem{Kind: KindSectionHead, Label: "omlx offline"})
+	if len(metrics.Omlx.Models) == 0 {
+		if metrics.Omlx.Running {
+			items = append(items, ListItem{Kind: KindSectionHead, Label: "omlx no models found"})
+		} else {
+			items = append(items, ListItem{Kind: KindSectionHead, Label: "omlx offline"})
+		}
 		return items
 	}
 
-	if len(metrics.Omlx.Models) > 0 {
-		items = append(items, ListItem{Kind: KindSectionHead, Label: "models"})
+	omlxCPU := 0.0
+	if metrics.OmlxProcess != nil {
+		omlxCPU = metrics.OmlxProcess.CPU
+	}
+	loadedCount := metrics.Omlx.LoadedCount
+	if loadedCount <= 0 {
 		for _, model := range metrics.Omlx.Models {
-			label := model.ID
-			extra := ""
 			if model.Loaded {
-				extra = styleGood.Render("loaded")
+				loadedCount++
 			}
+		}
+	}
+	loadedMem := metrics.Omlx.UsedMemory
+	if loadedCount > 0 && loadedMem > 0 {
+		loadedMem = loadedMem / uint64(loadedCount)
+	}
+	loadedMemPct := float32(0)
+	if metrics.Omlx.MaxMemory > 0 {
+		loadedMemPct = float32(float64(loadedMem) / float64(metrics.Omlx.MaxMemory) * 100)
+	} else if metrics.SysInfo.MemTotal > 0 {
+		loadedMemPct = float32(float64(loadedMem) / float64(metrics.SysInfo.MemTotal) * 100)
+	}
+
+	var loadedModels []monitor.OmlxModelInfo
+	var diskModels []monitor.OmlxModelInfo
+	for _, model := range metrics.Omlx.Models {
+		if model.Loaded {
+			loadedModels = append(loadedModels, model)
+		} else {
+			diskModels = append(diskModels, model)
+		}
+	}
+
+	if len(loadedModels) > 0 {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "omlx running"})
+		for _, model := range loadedModels {
 			items = append(items, ListItem{
-				Kind:  KindSectionHead,
-				Label: fmt.Sprintf("%-40s %s", label, extra),
+				Kind:      KindOllamaModel,
+				Provider:  "omlx",
+				Label:     model.ID,
+				ModelName: model.ID,
+				CPU:       omlxCPU,
+				Memory:    loadedMem,
+				MemoryPct: loadedMemPct,
+				Loaded:    true,
 			})
 		}
-	} else {
-		items = append(items, ListItem{Kind: KindSectionHead, Label: "no models found"})
+	}
+
+	if len(diskModels) > 0 {
+		items = append(items, ListItem{Kind: KindSectionHead, Label: "omlx on disk"})
+		for _, model := range diskModels {
+			size := "on disk"
+			if model.SizeBytes > 0 {
+				size = monitor.FormatMemory(model.SizeBytes)
+			}
+			items = append(items, ListItem{
+				Kind:      KindOllamaModel,
+				Provider:  "omlx",
+				Label:     model.ID,
+				ModelName: model.ID,
+				Extra:     size,
+				Loaded:    false,
+			})
+		}
 	}
 
 	return items

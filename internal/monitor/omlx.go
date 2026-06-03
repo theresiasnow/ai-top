@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -23,8 +24,9 @@ type OmlxStatus struct {
 
 // OmlxModelInfo represents a model known to omlx.
 type OmlxModelInfo struct {
-	ID     string
-	Loaded bool
+	ID        string
+	Loaded    bool
+	SizeBytes uint64
 }
 
 // OmlxClient talks to the omlx HTTP API.
@@ -46,6 +48,10 @@ type omlxSettings struct {
 	Auth struct {
 		APIKey string `json:"api_key"`
 	} `json:"auth"`
+	Model struct {
+		ModelDirs []string `json:"model_dirs"`
+		ModelDir  string   `json:"model_dir"`
+	} `json:"model"`
 }
 
 type omlxHealthResponse struct {
@@ -62,6 +68,15 @@ type omlxModelsResponse struct {
 	Data []struct {
 		ID string `json:"id"`
 	} `json:"data"`
+}
+
+type omlxModelsStatusResponse struct {
+	Models []struct {
+		ID            string `json:"id"`
+		Loaded        bool   `json:"loaded"`
+		EstimatedSize uint64 `json:"estimated_size"`
+		ActualSize    uint64 `json:"actual_size"`
+	} `json:"models"`
 }
 
 // NewOmlxClient reads ~/.omlx/settings.json and builds a client.
@@ -91,6 +106,74 @@ func NewOmlxClient() *OmlxClient {
 	}
 }
 
+func (c *OmlxClient) modelDirs() []string {
+	var dirs []string
+	home, err := os.UserHomeDir()
+	if err == nil {
+		data, err := os.ReadFile(filepath.Join(home, ".omlx", "settings.json"))
+		if err == nil {
+			var s omlxSettings
+			if json.Unmarshal(data, &s) == nil {
+				dirs = append(dirs, s.Model.ModelDirs...)
+				if s.Model.ModelDir != "" {
+					dirs = append(dirs, s.Model.ModelDir)
+				}
+			}
+		}
+	}
+	if len(dirs) == 0 && home != "" {
+		dirs = append(dirs, filepath.Join(home, ".omlx", "models"))
+	}
+
+	seen := make(map[string]bool, len(dirs))
+	unique := dirs[:0]
+	for _, dir := range dirs {
+		if dir == "" || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		unique = append(unique, dir)
+	}
+	return unique
+}
+
+func (c *OmlxClient) installedModels() []OmlxModelInfo {
+	var models []OmlxModelInfo
+	seen := make(map[string]bool)
+	for _, dir := range c.modelDirs() {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || seen[entry.Name()] {
+				continue
+			}
+			seen[entry.Name()] = true
+			models = append(models, OmlxModelInfo{
+				ID:        entry.Name(),
+				SizeBytes: dirSize(filepath.Join(dir, entry.Name())),
+			})
+		}
+	}
+	return models
+}
+
+func dirSize(root string) uint64 {
+	var total uint64
+	_ = filepath.WalkDir(root, func(_ string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err == nil && info.Size() > 0 {
+			total += uint64(info.Size())
+		}
+		return nil
+	})
+	return total
+}
+
 func (c *OmlxClient) get(path string) (*http.Response, error) {
 	req, err := http.NewRequest("GET", c.baseURL+path, nil)
 	if err != nil {
@@ -114,16 +197,16 @@ func (c *OmlxClient) IsRunning() bool {
 
 // GetStatus returns a populated OmlxStatus.
 func (c *OmlxClient) GetStatus() (OmlxStatus, error) {
-	status := OmlxStatus{}
+	status := OmlxStatus{Models: c.installedModels()}
 
 	// Health (no auth needed)
 	resp, err := c.client.Get(c.baseURL + "/health")
 	if err != nil {
-		return status, err
+		return status, nil
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 500 {
-		return status, fmt.Errorf("omlx health returned %d", resp.StatusCode)
+		return status, nil
 	}
 
 	var health omlxHealthResponse
@@ -135,14 +218,50 @@ func (c *OmlxClient) GetStatus() (OmlxStatus, error) {
 	status.MaxMemory = health.EnginePool.MaxModelMemory
 	status.UsedMemory = health.EnginePool.CurrentModelMemory
 
-	// Model list (requires auth)
+	// Model list (requires auth). /v1/models/status carries explicit loaded
+	// state; fall back to /v1/models only for IDs if an older server lacks it.
 	if status.Running {
+		if mResp, err := c.get("/v1/models/status"); err == nil {
+			defer mResp.Body.Close()
+			var modelsResp omlxModelsStatusResponse
+			if json.NewDecoder(mResp.Body).Decode(&modelsResp) == nil {
+				byID := make(map[string]int, len(status.Models))
+				for i, model := range status.Models {
+					byID[model.ID] = i
+				}
+				for _, m := range modelsResp.Models {
+					size := m.ActualSize
+					if size == 0 {
+						size = m.EstimatedSize
+					}
+					if i, ok := byID[m.ID]; ok {
+						status.Models[i].Loaded = m.Loaded
+						if size > 0 {
+							status.Models[i].SizeBytes = size
+						}
+					} else {
+						status.Models = append(status.Models, OmlxModelInfo{
+							ID:        m.ID,
+							Loaded:    m.Loaded,
+							SizeBytes: size,
+						})
+					}
+				}
+				return status, nil
+			}
+		}
 		if mResp, err := c.get("/v1/models"); err == nil {
 			defer mResp.Body.Close()
 			var modelsResp omlxModelsResponse
 			if json.NewDecoder(mResp.Body).Decode(&modelsResp) == nil {
+				byID := make(map[string]bool, len(status.Models))
+				for _, model := range status.Models {
+					byID[model.ID] = true
+				}
 				for _, m := range modelsResp.Data {
-					status.Models = append(status.Models, OmlxModelInfo{ID: m.ID, Loaded: true})
+					if !byID[m.ID] {
+						status.Models = append(status.Models, OmlxModelInfo{ID: m.ID})
+					}
 				}
 			}
 		}
