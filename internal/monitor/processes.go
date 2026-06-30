@@ -11,21 +11,42 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-// GetAllProcesses returns all monitored processes, the first ollama process,
-// and the first omlx process, enumerating system processes exactly once.
-func (m *Monitor) GetAllProcesses() (all []ProcessInfo, ollamaProc *ProcessInfo, omlxProc *ProcessInfo, err error) {
+// watchedProcessNames returns the set of process names ai-top cares about.
+// Only these processes pay the cost of the expensive per-process detail lookup
+// (Cmdline/MemoryInfo/Username) — everything else on the system is skipped after
+// a single cheap Name() read. "node"/"nodejs" are included because OpenClaw runs
+// as a node process and is matched by command line.
+func watchedProcessNames() map[string]bool {
 	watched := map[string]bool{
 		"node": true, "nodejs": true, "ollama": true,
 	}
 	if SupportsOmlx() {
 		watched["omlx"] = true
 	}
+	return watched
+}
+
+// processSnapshot is the result of enumerating the system process table exactly
+// once. It holds detailed info only for the watched processes (see
+// watchedProcessNames), so callers within a single refresh can share one
+// enumeration instead of each sweeping the full table independently.
+type processSnapshot struct {
+	watched []ProcessInfo
+}
+
+// snapshotProcesses enumerates the process table a single time. It reads the
+// cheap Name() for every PID but only computes full ProcessInfo (which calls the
+// expensive Cmdline() syscall) for processes whose name is watched. This is the
+// hot path that runs every refresh; keep it lean.
+func snapshotProcesses() (*processSnapshot, error) {
+	watched := watchedProcessNames()
 
 	procs, err := process.Processes()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
+	snap := &processSnapshot{}
 	for _, p := range procs {
 		name, nameErr := p.Name()
 		if nameErr != nil {
@@ -35,31 +56,83 @@ func (m *Monitor) GetAllProcesses() (all []ProcessInfo, ollamaProc *ProcessInfo,
 		if !watched[name] && !watched[base] {
 			continue
 		}
-		info, infoErr := getProcessInfo(p)
+		// Only node processes can be OpenClaw, and the command line is used
+		// solely for that match — skip the costly Cmdline() syscall elsewhere.
+		needCmdline := name == "node" || base == "node" || name == "nodejs" || base == "nodejs"
+		info, infoErr := getProcessInfoWithOpts(p, needCmdline)
 		if infoErr != nil {
 			continue
 		}
+		snap.watched = append(snap.watched, info)
+	}
+	return snap, nil
+}
+
+// monitored splits the watched processes into the full list plus the first
+// ollama and omlx processes, matching the previous GetAllProcesses contract.
+func (s *processSnapshot) monitored() (all []ProcessInfo, ollamaProc *ProcessInfo, omlxProc *ProcessInfo) {
+	for _, info := range s.watched {
+		base := strings.TrimSuffix(info.Name, ".exe")
 		all = append(all, info)
-		if ollamaProc == nil && (name == "ollama" || base == "ollama") {
+		if ollamaProc == nil && (info.Name == "ollama" || base == "ollama") {
 			cp := info
 			ollamaProc = &cp
 		}
-		if SupportsOmlx() && omlxProc == nil && (name == "omlx" || base == "omlx") {
+		if SupportsOmlx() && omlxProc == nil && (info.Name == "omlx" || base == "omlx") {
 			cp := info
 			omlxProc = &cp
 		}
 	}
+	return all, ollamaProc, omlxProc
+}
+
+// openClaw returns the watched processes whose command line references OpenClaw.
+func (s *processSnapshot) openClaw() []ProcessInfo {
+	home, _ := os.UserHomeDir()
+	openclawPath := filepath.Join(home, ".openclaw")
+
+	var results []ProcessInfo
+	for _, info := range s.watched {
+		if strings.Contains(info.CommandLine, openclawPath) || strings.Contains(info.CommandLine, "openclaw") {
+			results = append(results, info)
+		}
+	}
+	return results
+}
+
+// GetAllProcesses returns all monitored processes, the first ollama process,
+// and the first omlx process, enumerating system processes exactly once.
+func (m *Monitor) GetAllProcesses() (all []ProcessInfo, ollamaProc *ProcessInfo, omlxProc *ProcessInfo, err error) {
+	snap, err := snapshotProcesses()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	all, ollamaProc, omlxProc = snap.monitored()
 	return all, ollamaProc, omlxProc, nil
 }
 
-// getProcessInfo extracts detailed info from a process
+// getProcessInfo extracts detailed info from a process, including the command
+// line. Cmdline() is the most expensive per-process syscall on macOS; prefer
+// getProcessInfoWithOpts(p, false) when the command line is not needed.
 func getProcessInfo(p *process.Process) (ProcessInfo, error) {
+	return getProcessInfoWithOpts(p, true)
+}
+
+// getProcessInfoWithOpts extracts detailed info from a process. When
+// withCmdline is false the command line is left empty, skipping the costly
+// Cmdline() syscall — only node processes need it (to identify OpenClaw); the
+// command line is never displayed.
+func getProcessInfoWithOpts(p *process.Process, withCmdline bool) (ProcessInfo, error) {
 	name, _ := p.Name()
-	cmdline, _ := p.Cmdline()
 	createTime, _ := p.CreateTime()
 	memInfo, _ := p.MemoryInfo()
 	cpuPercent, _ := p.CPUPercent()
 	memPercent, _ := p.MemoryPercent()
+
+	var cmdline string
+	if withCmdline {
+		cmdline, _ = p.Cmdline()
+	}
 
 	// Get username
 	username := "?"
@@ -148,30 +221,14 @@ func CheckOpenClawPort(port int) bool {
 	return err == nil
 }
 
-// GetOpenClawProcesses finds OpenClaw-related processes
+// GetOpenClawProcesses finds OpenClaw-related processes. It enumerates the
+// process table once and only inspects the command line of watched processes
+// (OpenClaw runs as node), avoiding a Cmdline() syscall on every PID on the
+// system every refresh — the original cause of ai-top's runaway CPU use.
 func GetOpenClawProcesses() ([]ProcessInfo, error) {
-	processes, err := process.Processes()
+	snap, err := snapshotProcesses()
 	if err != nil {
 		return nil, err
 	}
-
-	var results []ProcessInfo
-	home, _ := os.UserHomeDir()
-	openclawPath := filepath.Join(home, ".openclaw")
-
-	for _, p := range processes {
-		cmdline, err := p.Cmdline()
-		if err != nil {
-			continue
-		}
-
-		// Check if process is in .openclaw directory or contains openclaw references
-		if strings.Contains(cmdline, openclawPath) || strings.Contains(cmdline, "openclaw") {
-			if info, err := getProcessInfo(p); err == nil {
-				results = append(results, info)
-			}
-		}
-	}
-
-	return results, nil
+	return snap.openClaw(), nil
 }

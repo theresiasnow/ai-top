@@ -153,8 +153,13 @@ func (m *Monitor) Refresh() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Single process-table enumeration shared by every consumer below. Sweeping
+	// the table once per refresh (instead of once per consumer) is what keeps
+	// ai-top's own CPU footprint negligible.
+	snap, snapErr := snapshotProcesses()
+
 	// OpenClaw status
-	status, _ := m.openClaw.GetStatus()
+	status, _ := m.openClaw.GetStatusFromSnapshot(snap)
 	m.metrics.OpenClaw = status
 
 	// omlx status
@@ -187,8 +192,10 @@ func (m *Monitor) Refresh() error {
 	}
 	m.metrics.RunningModels = runningModels
 
-	// Processes — single enumeration for list, ollama process, and omlx process
-	if procs, ollamaProc, omlxProc, err := m.GetAllProcesses(); err == nil {
+	// Processes — reuse the single enumeration above for list, ollama process,
+	// and omlx process.
+	if snapErr == nil {
+		procs, ollamaProc, omlxProc := snap.monitored()
 		m.metrics.Processes = procs
 		m.metrics.OllamaProcess = ollamaProc
 		m.metrics.OmlxProcess = omlxProc
