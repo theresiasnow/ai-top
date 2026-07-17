@@ -963,7 +963,6 @@ func (m Model) renderOllamaMetricsPanel(metrics *monitor.SystemMetrics, contentH
 	return sb.String()
 }
 
-
 func (m Model) buildOllamaModelItems(metrics *monitor.SystemMetrics) []ListItem {
 	var items []ListItem
 	ollamaCPU := 0.0
@@ -1061,11 +1060,10 @@ func (m Model) buildCronItems(metrics *monitor.SystemMetrics) []ListItem {
 	return items
 }
 
-
 func processItem(p monitor.ProcessInfo) ListItem {
 	return ListItem{
 		Kind:      KindProcess,
-		Label:     p.Name,
+		Label:     monitor.ProcessLabel(p),
 		PID:       p.PID,
 		CPU:       p.CPU,
 		Memory:    p.Memory,
@@ -1113,7 +1111,6 @@ func sortByName(processes []monitor.ProcessInfo) {
 		return processes[i].Name < processes[j].Name
 	})
 }
-
 
 func (m Model) renderFooter() string {
 	// Tab bar at the beginning

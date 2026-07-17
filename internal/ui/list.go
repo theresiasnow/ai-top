@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/tess/ai-top/internal/monitor"
 )
 
 type ItemKind int
@@ -124,19 +125,27 @@ func (l *SelectableList) Render(innerWidth, height int) []string {
 	return lines
 }
 
-func (l *SelectableList) header(innerWidth int) string {
-	const (
-		sizeW   = 14
-		cpuW    = 15
-		memW    = 17
-		spacers = 6
-	)
-	nameW := innerWidth - sizeW - cpuW - memW - spacers
-	if nameW < 14 {
-		nameW = 14
+// column widths shared by the header and every data row so they stay aligned.
+const (
+	colSizeW = 14 // "SIZE / USER" — user for processes, size for models
+	colCPUW  = 15 // CPU% or model-heat
+	colMemW  = 17 // memory value or VRAM bar
+)
+
+// colNameW returns the NAME column width for a given inner box width.
+// The header and data rows MUST use this same value or columns drift apart.
+func colNameW(innerWidth int) int {
+	// "  " cursor gutter + 3× "  " inter-column spacers = 8 fixed chars.
+	nameW := innerWidth - colSizeW - colCPUW - colMemW - 8
+	if nameW < 12 {
+		nameW = 12
 	}
-	return styleColHead.Render(fmt.Sprintf("  %-*s  %-*s  %-*s  %-*s",
-		nameW, "NAME", sizeW, "SIZE / USER", cpuW, "CPU", memW, "MEMORY"))
+	return nameW
+}
+
+func (l *SelectableList) header(innerWidth int) string {
+	return styleColHead.Render(fmt.Sprintf("  %-*s  %-*s  %*s  %*s",
+		colNameW(innerWidth), "NAME", colSizeW, "SIZE / USER", colCPUW, "CPU", colMemW, "MEMORY"))
 }
 
 func (l *SelectableList) renderItem(index int, item ListItem, innerWidth int) string {
@@ -149,16 +158,7 @@ func (l *SelectableList) renderItem(index int, item ListItem, innerWidth int) st
 		return styleDim.Render(prefix + strings.Repeat("─", fill))
 	}
 
-	const (
-		sizeW   = 14
-		cpuW    = 15
-		memW    = 17
-		spacers = 6
-	)
-	nameW := innerWidth - sizeW - cpuW - memW - spacers - 2
-	if nameW < 12 {
-		nameW = 12
-	}
+	nameW := colNameW(innerWidth)
 
 	cursor := " "
 	if l.selected == index {
@@ -167,30 +167,62 @@ func (l *SelectableList) renderItem(index int, item ListItem, innerWidth int) st
 
 	name := item.Label
 	if item.PID != 0 {
-		name = fmt.Sprintf("%d  %s", item.PID, item.Label)
+		// Pad the PID to 6 columns so labels start at the same column
+		// regardless of PID width (macOS PIDs vary from 3 to 5+ digits).
+		name = fmt.Sprintf("%-6d %s", item.PID, item.Label)
 	}
 	nameStr := lipgloss.NewStyle().Width(nameW).Foreground(colorText).Render(truncate(name, nameW))
-	extraStr := lipgloss.NewStyle().Width(sizeW).Foreground(colorDim).Render(truncate(item.Extra, sizeW))
+	extraStr := lipgloss.NewStyle().Width(colSizeW).Foreground(colorDim).Render(truncate(item.Extra, colSizeW))
 
 	if item.Kind == KindOllamaModel {
-		cpuStr := lipgloss.NewStyle().Width(cpuW).Render(modelHeat(item.ModelName))
+		cpuStr := lipgloss.NewStyle().Width(colCPUW).Render(modelHeat(item.ModelName))
 		var memStr string
 		if item.Loaded {
-			cpuStr = lipgloss.NewStyle().Width(cpuW).Render(greenCPUBar(item.CPU))
-			memStr = lipgloss.NewStyle().Width(memW).Render(
+			cpuStr = lipgloss.NewStyle().Width(colCPUW).Render(greenCPUBar(item.CPU))
+			memStr = lipgloss.NewStyle().Width(colMemW).Render(
 				styleGood.Render("▶ ") + greenMemBar(item.Memory, item.MemoryPct))
 		} else {
 			sizeInfo := item.Extra
 			if sizeInfo == "" {
 				sizeInfo = "on disk"
 			}
-			memStr = lipgloss.NewStyle().Width(memW).Render(
+			memStr = lipgloss.NewStyle().Width(colMemW).Render(
 				styleDim.Render("○ " + sizeInfo))
 		}
 		return cursor + " " + nameStr + "  " + extraStr + "  " + cpuStr + "  " + memStr
 	}
 
-	return cursor + " " + nameStr + "  " + extraStr + "  " + cpuBar(item.CPU) + "  " + memBar(item.Memory, item.MemoryPct)
+	// Process rows: plain right-aligned numbers (no bars). The bar backgrounds
+	// carry no signal for a process list where most values sit near zero.
+	cpuStr := lipgloss.NewStyle().Width(colCPUW).Foreground(cpuColor(item.CPU)).
+		Render(fmt.Sprintf("%*s", colCPUW, fmt.Sprintf("%.1f%%", item.CPU)))
+	memStr := lipgloss.NewStyle().Width(colMemW).Foreground(memColor(item.MemoryPct)).
+		Render(fmt.Sprintf("%*s", colMemW, monitor.FormatMemory(item.Memory)))
+	return cursor + " " + nameStr + "  " + extraStr + "  " + cpuStr + "  " + memStr
+}
+
+// cpuColor / memColor mirror the bar color thresholds so numbers keep the
+// same green→amber→red severity cue the bars used to give.
+func cpuColor(pct float64) lipgloss.Color {
+	switch {
+	case pct >= 80:
+		return colorRed
+	case pct >= 50:
+		return colorAmber
+	default:
+		return colorGreen
+	}
+}
+
+func memColor(pct float32) lipgloss.Color {
+	switch {
+	case pct >= 10:
+		return colorRed
+	case pct >= 5:
+		return colorAmber
+	default:
+		return colorGreen
+	}
 }
 
 func (l *SelectableList) actionBar(innerWidth int) string {

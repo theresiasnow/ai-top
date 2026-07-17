@@ -157,6 +157,47 @@ func getProcessInfoWithOpts(p *process.Process, withCmdline bool) (ProcessInfo, 
 	}, nil
 }
 
+// ProcessLabel derives a human-friendly name for a process. For node processes
+// every row's Name() is just "node"; the useful identity lives in the command
+// line (the script or bin being run), which we already fetch for node. Returns
+// the script/bin basename (".js"/".cjs"/".mjs" stripped) when it can be found,
+// otherwise falls back to the process name.
+func ProcessLabel(p ProcessInfo) string {
+	base := strings.TrimSuffix(p.Name, ".exe")
+	if base != "node" && base != "nodejs" {
+		return p.Name
+	}
+	if label := scriptFromCmdline(p.CommandLine); label != "" {
+		return label
+	}
+	return p.Name
+}
+
+// scriptFromCmdline picks the script/bin a node invocation is running: the first
+// argument after the node executable that isn't a flag. Returns its basename with
+// a JS extension stripped, or "" if none is found.
+func scriptFromCmdline(cmdline string) string {
+	fields := strings.Fields(cmdline)
+	if len(fields) == 0 {
+		return ""
+	}
+	// fields[0] is the node executable itself; scan the rest for the first
+	// non-flag token (skips "--liftoff-only", "--type=utility", etc.).
+	for _, arg := range fields[1:] {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		name := filepath.Base(arg)
+		for _, ext := range []string{".js", ".cjs", ".mjs"} {
+			name = strings.TrimSuffix(name, ext)
+		}
+		if name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
 // FormatMemory converts bytes to human-readable format
 func FormatMemory(bytes uint64) string {
 	units := []string{"B", "KB", "MB", "GB"}
