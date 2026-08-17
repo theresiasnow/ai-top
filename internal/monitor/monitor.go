@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/tess/ai-top/internal/usage"
 )
 
 // SystemMetrics holds current system state
@@ -19,7 +21,8 @@ type SystemMetrics struct {
 	SysInfo       SystemInfo
 	DiskUsagePct  float64
 	OllamaLogs    []string
-	RunningModels []RunningModel // models currently loaded in memory
+	RunningModels []RunningModel       // models currently loaded in memory
+	Usage         []usage.HarnessUsage // per-harness token/quota usage
 }
 
 type OpenClawStatus struct {
@@ -82,6 +85,7 @@ type Monitor struct {
 	openClaw    *OpenClawDetector
 	Ollama      *OllamaClient
 	omlx        *OmlxClient
+	usage       *usage.Collector
 	ollamaPort  string
 	refreshRate time.Duration
 }
@@ -95,6 +99,7 @@ func NewMonitor() *Monitor {
 		openClaw:    NewOpenClawDetector(3000),
 		Ollama:      NewOllamaClient(""),
 		omlx:        newOmlxClientForPlatform(),
+		usage:       usage.NewCollector(),
 		ollamaPort:  "11434",
 		refreshRate: 2 * time.Second,
 	}
@@ -148,6 +153,11 @@ func (m *Monitor) GetMetrics() *SystemMetrics {
 	if m.metrics.RunningModels != nil {
 		snapshot.RunningModels = make([]RunningModel, len(m.metrics.RunningModels))
 		copy(snapshot.RunningModels, m.metrics.RunningModels)
+	}
+
+	if m.metrics.Usage != nil {
+		snapshot.Usage = make([]usage.HarnessUsage, len(m.metrics.Usage))
+		copy(snapshot.Usage, m.metrics.Usage)
 	}
 
 	return &snapshot
@@ -220,7 +230,29 @@ func (m *Monitor) Refresh() error {
 	// Ollama logs (tail)
 	m.metrics.OllamaLogs = ReadOllamaLogs(8)
 
+	// Usage rows are gathered on their own slower ticker; this only reads the
+	// cached result, so a refresh never waits on log or database scanning.
+	if m.usage != nil {
+		m.metrics.Usage = m.usage.Rows()
+	}
+
 	return nil
+}
+
+// UsageWindow returns the rolling window that usage figures are summed over.
+func (m *Monitor) UsageWindow() time.Duration {
+	if m.usage == nil {
+		return usage.DefaultWindow
+	}
+	return m.usage.Window()
+}
+
+// StartUsageCollection begins background usage collection, stopping when stop
+// is closed.
+func (m *Monitor) StartUsageCollection(stop <-chan struct{}) {
+	if m.usage != nil {
+		m.usage.StartAutoRefresh(stop)
+	}
 }
 
 // StartAutoRefresh runs a background goroutine that refreshes metrics
