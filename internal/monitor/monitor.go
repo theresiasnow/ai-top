@@ -49,6 +49,11 @@ type RunningModel struct {
 	SizeVRAM  uint64    // bytes in GPU/unified memory
 	SizeRAM   uint64    // bytes in CPU RAM (size - size_vram)
 	ExpiresAt time.Time // when Ollama will unload it if idle
+
+	ContextLength int    // loaded context window, 0 when not reported
+	Quantization  string // e.g. "Q4_K_M", empty when not reported
+	ParameterSize string // e.g. "30.5B", empty when not reported
+	Backend       string // "ollama" or "omlx"
 }
 
 type CronJob struct {

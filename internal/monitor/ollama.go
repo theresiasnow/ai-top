@@ -33,6 +33,15 @@ type ollamaPsResponse struct {
 		Size      uint64    `json:"size"`
 		SizeVRAM  uint64    `json:"size_vram"`
 		ExpiresAt time.Time `json:"expires_at"`
+		// ContextLength is the loaded context window. Ollama reports it per
+		// loaded instance, so it reflects the actual num_ctx in use rather
+		// than the model's maximum.
+		ContextLength int `json:"context_length"`
+		Details       struct {
+			ParameterSize     string `json:"parameter_size"`
+			QuantizationLevel string `json:"quantization_level"`
+			Family            string `json:"family"`
+		} `json:"details"`
 	} `json:"models"`
 }
 
@@ -118,10 +127,14 @@ func (oc *OllamaClient) GetRunningModels() ([]RunningModel, error) {
 			sizeRAM = m.Size - m.SizeVRAM
 		}
 		models = append(models, RunningModel{
-			Name:      m.Name,
-			SizeVRAM:  m.SizeVRAM,
-			SizeRAM:   sizeRAM,
-			ExpiresAt: m.ExpiresAt,
+			Name:          m.Name,
+			SizeVRAM:      m.SizeVRAM,
+			SizeRAM:       sizeRAM,
+			ExpiresAt:     m.ExpiresAt,
+			ContextLength: m.ContextLength,
+			Quantization:  m.Details.QuantizationLevel,
+			ParameterSize: m.Details.ParameterSize,
+			Backend:       BackendOllama,
 		})
 	}
 	return models, nil
