@@ -22,6 +22,12 @@ func main() {
 	// Start background refresh
 	mon.StartAutoRefresh()
 
+	// Usage collection runs on its own slower ticker; stop it on exit so the
+	// goroutine does not outlive the UI.
+	stopUsage := make(chan struct{})
+	defer close(stopUsage)
+	mon.StartUsageCollection(stopUsage)
+
 	// Create model
 	model := ui.NewModel(mon)
 

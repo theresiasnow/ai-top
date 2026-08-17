@@ -49,6 +49,8 @@ const (
 	tabCron          = 4
 	tabOllamaMetrics = 5
 	tabOmlx          = 6
+	tabUsage         = 7
+	tabLoadedModels  = 8
 )
 
 func NewModel(mon *monitor.Monitor) Model {
@@ -70,6 +72,9 @@ func availableTabs() []int {
 	if monitor.SupportsOmlx() {
 		tabs = append(tabs, tabOmlx)
 	}
+	// Usage and Loaded Models are platform-independent: both degrade to an
+	// empty table rather than being unavailable when nothing is installed.
+	tabs = append(tabs, tabUsage, tabLoadedModels)
 	return tabs
 }
 
@@ -140,6 +145,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.currentTab = tabOmlx
 				m.errMsg = ""
 			}
+		case "7":
+			m.currentTab = tabUsage
+			m.errMsg = ""
+		case "8":
+			m.currentTab = tabLoadedModels
+			m.errMsg = ""
 		case "tab":
 			m.currentTab = m.nextTab()
 			m.errMsg = ""
@@ -281,6 +292,10 @@ func (m Model) View() string {
 		sb.WriteString(m.renderOllamaMetricsPanel(metrics, contentHeight))
 	case tabOmlx:
 		sb.WriteString(m.renderOmlxPanel(metrics, contentHeight))
+	case tabUsage:
+		sb.WriteString(m.renderUsagePanel(metrics, contentHeight))
+	case tabLoadedModels:
+		sb.WriteString(m.renderLoadedModelsPanel(metrics, contentHeight))
 	default: // tabNodeProcesses
 		sb.WriteString(m.renderProcessPanel(metrics, contentHeight))
 	}
@@ -1121,6 +1136,8 @@ func (m Model) renderFooter() string {
 		tabCron:          "Cron",
 		tabOllamaMetrics: "Metrics",
 		tabOmlx:          "omlx",
+		tabUsage:         "Usage",
+		tabLoadedModels:  "Models",
 	}
 
 	var tabParts []string

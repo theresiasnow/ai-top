@@ -59,11 +59,19 @@ func DefaultCodexRoot() string {
 
 func (c *CodexSource) Name() string { return "Codex" }
 
+// quotaLookback bounds the search for the newest quota reading.
+//
+// Codex's quota covers a 7-day window, so a session inside the caller's much
+// shorter token window is not required for the quota to be current — without
+// this, an idle afternoon makes a real 71% quota silently render as "local".
+const quotaLookback = 8 * 24 * time.Hour
+
 // Collect sums usage across rollout logs touched within the window.
 //
 // Token totals add up across sessions, but the quota percentage does not: it
 // is an account-wide figure repeated in every session, so the most recently
-// observed value wins.
+// observed value wins — and it is searched over a longer lookback than tokens,
+// since the quota window outlives any single token window.
 func (c *CodexSource) Collect(since time.Time) (HarnessUsage, error) {
 	out := HarnessUsage{Harness: c.Name()}
 
@@ -81,11 +89,18 @@ func (c *CodexSource) Collect(since time.Time) (HarnessUsage, error) {
 	}
 
 	out.Available = true
+	quotaCutoff := time.Now().Add(-quotaLookback)
 	var newestQuota time.Time
 
 	for _, path := range paths {
 		info, err := os.Stat(path)
-		if err != nil || info.ModTime().Before(since) {
+		if err != nil {
+			continue
+		}
+
+		inTokenWindow := !info.ModTime().Before(since)
+		inQuotaWindow := info.ModTime().After(quotaCutoff)
+		if !inTokenWindow && !inQuotaWindow {
 			continue
 		}
 
@@ -94,11 +109,13 @@ func (c *CodexSource) Collect(since time.Time) (HarnessUsage, error) {
 			continue
 		}
 
-		out.InputTokens += fileUsage.InputTokens
-		out.OutputTokens += fileUsage.OutputTokens
-		out.CacheRead += fileUsage.CacheRead
-		out.CacheWrite += fileUsage.CacheWrite
-		out.TotalTokens += fileUsage.TotalTokens
+		if inTokenWindow {
+			out.InputTokens += fileUsage.InputTokens
+			out.OutputTokens += fileUsage.OutputTokens
+			out.CacheRead += fileUsage.CacheRead
+			out.CacheWrite += fileUsage.CacheWrite
+			out.TotalTokens += fileUsage.TotalTokens
+		}
 
 		// Quota is account-wide, not per session: keep the freshest reading
 		// instead of accumulating.

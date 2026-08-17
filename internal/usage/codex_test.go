@@ -57,6 +57,27 @@ func TestScanCodexFileReadsReportedQuota(t *testing.T) {
 	}
 }
 
+// Regression: running the app with the default 5h token window showed Codex as
+// "local" with 0 tokens, hiding a real reported quota. Codex's quota covers 7
+// days, so it must be searched over a longer lookback than the token window —
+// an idle afternoon is not evidence that the quota is unknown.
+func TestCodexQuotaSurvivesShortTokenWindow(t *testing.T) {
+	src := NewCodexSource(DefaultCodexRoot())
+
+	// A one-minute token window: almost certainly no session activity, yet the
+	// quota should still be found.
+	got, err := src.Collect(time.Now().Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !got.Available {
+		t.Skip("Codex not installed on this machine")
+	}
+	if got.QuotaSource != QuotaReported {
+		t.Errorf("quota lost with a short token window: QuotaSource = %v, want QuotaReported", got.QuotaSource)
+	}
+}
+
 func TestCodexSourceMissingRoot(t *testing.T) {
 	src := NewCodexSource(filepath.Join("testdata", "nonexistent-root"))
 	got, err := src.Collect(time.Now().Add(-DefaultWindow))
