@@ -26,11 +26,15 @@ Tests are integration-style and tolerate missing services (Ollama, OpenClaw not 
 
 **Data flow:** `Monitor.StartAutoRefresh()` (goroutine, 2s tick) → `Monitor.Refresh()` → updates `SystemMetrics` under `sync.RWMutex` → `ui.Model.View()` calls `Monitor.GetMetrics()` (snapshot copy) on each 500ms bubbletea tick.
 
-Two layers:
+Usage collection runs on a separate 30s ticker (`Monitor.StartUsageCollection`), not the 2s one: it scans hundreds of log files and a sqlite database. `Refresh()` only reads its cached rows.
+
+Three layers:
 
 - **`internal/monitor/`** — all data collection. `Monitor` is the central struct. Each file owns one concern: `processes.go` (Node/Ollama process discovery), `ollama.go` (HTTP API client), `openclaw.go` (process + HTTP health detection), `cron.go` (reads `~/.openclaw/cron/jobs.json`), `system.go` (CPU/mem via gopsutil), `ollama_extended.go` (model priority helpers).
 
-- **`internal/ui/model.go`** — single bubbletea `Model`, all rendering. Rendering functions return `[]string` (lines); `renderMainPanel` wraps them in box borders. Column widths are derived from `m.width - 4` (inner box width).
+- **`internal/usage/`** — per-harness token/quota tracking, one file per harness. Each `Source` parses its own log format into `HarnessUsage` at the boundary. What each harness can actually report differs, and the type preserves that: `Available` distinguishes "unknown" from zero, `QuotaSource` distinguishes a server-reported percentage (Codex) from one derived against a local cap (Claude). OpenClaw has no usage log at all and always reports unavailable — do not fill that row with a computed number.
+
+- **`internal/ui/model.go`** — single bubbletea `Model`, all rendering. Rendering functions return `[]string` (lines); `renderMainPanel` wraps them in box borders. Column widths are derived from `m.width - 4` (inner box width). Newer panels live in their own files (`usage_view.go`, `models_view.go`) to keep `model.go` from growing further.
 
 ## Conventions
 
