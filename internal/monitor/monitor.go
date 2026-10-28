@@ -20,6 +20,7 @@ type SystemMetrics struct {
 	UpdatedAt     time.Time
 	SysInfo       SystemInfo
 	DiskUsagePct  float64
+	DiskFree      uint64
 	OllamaLogs    []string
 	RunningModels []RunningModel       // models currently loaded in memory
 	Usage         []usage.HarnessUsage // per-harness token/quota usage
@@ -223,8 +224,9 @@ func (m *Monitor) Refresh() error {
 	if sysInfo, err := GetSystemInfo(); err == nil {
 		m.metrics.SysInfo = sysInfo
 	}
-	if pct, err := OllamaModelsDiskUsagePct(); err == nil {
+	if pct, free, err := OllamaModelsDiskUsage(); err == nil {
 		m.metrics.DiskUsagePct = pct
+		m.metrics.DiskFree = free
 	}
 
 	// Ollama logs (tail)

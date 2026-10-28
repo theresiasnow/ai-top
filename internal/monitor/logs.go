@@ -47,17 +47,42 @@ func ReadOllamaLogs(n int) []string {
 	return result
 }
 
-// OllamaModelsDiskUsagePct returns the used-percent for the partition
-// containing ~/.ollama/models (falls back to the home partition).
-func OllamaModelsDiskUsagePct() (float64, error) {
+// OllamaModelsDiskUsage returns the used-percent and free bytes for the
+// partition containing ~/.ollama/models (falls back to the home partition).
+func OllamaModelsDiskUsage() (pct float64, free uint64, err error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	for _, p := range []string{home + "/.ollama/models", home} {
 		if u, err := disk.Usage(p); err == nil {
-			return u.UsedPercent, nil
+			return u.UsedPercent, u.Free, nil
 		}
 	}
-	return 0, nil
+	return 0, 0, nil
+}
+
+// DiskLevel classifies disk pressure. Percent alone misleads on large disks
+// (90% of 4TB is still hundreds of GB), so absolute free space also counts.
+type DiskLevel int
+
+const (
+	DiskOK DiskLevel = iota
+	DiskHigh
+	DiskCritical
+)
+
+const (
+	diskCriticalFree = 10 << 30
+	diskHighFree     = 25 << 30
+)
+
+func ClassifyDisk(pct float64, free uint64) DiskLevel {
+	switch {
+	case pct >= 90 || free < diskCriticalFree:
+		return DiskCritical
+	case pct >= 80 || free < diskHighFree:
+		return DiskHigh
+	}
+	return DiskOK
 }

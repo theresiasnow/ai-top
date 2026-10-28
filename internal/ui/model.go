@@ -675,15 +675,17 @@ func (m Model) generateMemoryLines(metrics *monitor.SystemMetrics) []string {
 		}
 	}
 
+	diskLevel := monitor.ClassifyDisk(metrics.DiskUsagePct, metrics.DiskFree)
+	diskFree := monitor.FormatMemory(metrics.DiskFree)
 	switch {
+	case diskLevel == monitor.DiskCritical:
+		lines = append(lines, styleBad.Render(fmt.Sprintf("• Disk critical – only %s free, free space immediately", diskFree)))
 	case ramPct >= 85:
 		lines = append(lines, styleWarn.Render("• RAM critical – unload models or restart Ollama"))
 	case ramPct >= 70:
 		lines = append(lines, styleText.Render("• RAM high – keep-alive settings may need review"))
-	case metrics.DiskUsagePct >= 90:
-		lines = append(lines, styleBad.Render("• Disk critical – free space immediately"))
-	case metrics.DiskUsagePct >= 80:
-		lines = append(lines, styleWarn.Render("• Disk high – old models may need cleanup"))
+	case diskLevel == monitor.DiskHigh:
+		lines = append(lines, styleWarn.Render(fmt.Sprintf("• Disk high – %s free, old models may need cleanup", diskFree)))
 	default:
 		lines = append(lines, styleGood.Render("• RAM usage is comfortable"))
 	}
@@ -902,9 +904,10 @@ func (m Model) renderOllamaMetricsPanel(metrics *monitor.SystemMetrics, contentH
 			lines = append(lines, cpuLine)
 
 			// Disk info (placeholder)
-			diskLine := fmt.Sprintf("  DISK        %s  %.1f%%",
+			diskLine := fmt.Sprintf("  DISK        %s  %.1f%%  %s free",
 				miniBar(metrics.DiskUsagePct, 20),
 				metrics.DiskUsagePct,
+				monitor.FormatMemory(metrics.DiskFree),
 			)
 			lines = append(lines, diskLine)
 
